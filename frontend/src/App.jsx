@@ -653,7 +653,7 @@ function App() {
       {/* Footer */}
       <footer className="max-w-5xl w-full mx-auto border-t border-neutral-900 pt-4 flex flex-col sm:flex-row items-center justify-between text-xs text-gray-600 gap-2">
         <p>© 2026 Helium Sync Daemon. All rights reserved.</p>
-        <p>Version: 0.1.0 • MIT License</p>
+        <p>Version: 0.2.0 • MIT License</p>
       </footer>
     </div>
   );

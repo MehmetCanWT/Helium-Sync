@@ -69,6 +69,39 @@ fn is_blacklisted(path: &Path) -> bool {
             || comp.contains("blob_storage")
             || comp.contains("crash reports")
             || comp.contains("metrics")
+            || comp.contains("gpucache")
+            || comp.contains("gpupersistentcache")
+            || comp.contains("dawnwebgpucache")
+            || comp.contains("dawngraphitecache")
+            || comp.contains("graphitedawncache")
+            || comp.contains("dictionaries")
+            || comp.contains("certificaterevocation")
+            || comp.contains("component_crx_cache")
+            || comp.contains("segmentation_platform")
+            || comp.contains("shared_proto_db")
+            || comp.contains("optimization_guide")
+            || comp.contains("videodecodestats")
+            || comp.contains("persistentorigintrials")
+            || comp.contains("parcel_tracking_db")
+            || comp.contains("discounts_db")
+            || comp.contains("discount_infos_db")
+            || comp.contains("commerce_subscription_db")
+            || comp.contains("extensions")
+            || comp.contains("local extension settings")
+            || comp.contains("managed extension settings")
+            || comp.contains("extension rules")
+            || comp.contains("extension scripts")
+            || comp.contains("extension state")
+            || comp.contains("webstorage")
+            || comp.contains("webstore downloads")
+            || comp.contains("gcm store")
+            || comp.contains("file system")
+            || comp.contains("shared dictionary")
+            || comp.contains("platform notifications")
+            || comp.contains("site characteristics database")
+            || comp.contains("nativemessaginghosts")
+            || comp.contains("browsermetrics")
+            || comp.contains("widevinecdm")
             || comp == "lock"
             || comp == "singletoncookie"
             || comp == "singletonlock"
@@ -313,13 +346,19 @@ pub async fn pull_webdav(config: &Config) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(data.to_vec()))
 }
 
-// GitHub Gist Push
+// Maximum size per Gist file chunk (~900KB base64 = ~675KB raw, well under the 1MB API limit)
+const GIST_CHUNK_SIZE: usize = 900_000;
+
+// GitHub Gist Push (with multi-part chunking for large payloads)
 pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(), String> {
     if config.github_token.is_empty() {
         return Err("GitHub Token not configured.".to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let b64_content = BASE64_STANDARD.encode(file_data);
 
     // If Gist ID is empty, search for an existing one on GitHub
@@ -348,14 +387,36 @@ pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(
         }
     }
 
+    // Split b64 content into chunks to stay under Gist per-file size limits
+    let mut files = serde_json::Map::new();
+    if b64_content.len() <= GIST_CHUNK_SIZE {
+        files.insert(
+            "helium_sync_profile.bin".to_string(),
+            serde_json::json!({ "content": b64_content }),
+        );
+    } else {
+        let chunks: Vec<&str> = b64_content
+            .as_bytes()
+            .chunks(GIST_CHUNK_SIZE)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
+            .collect();
+        // Write a manifest so the pull side knows how many parts exist
+        files.insert(
+            "helium_sync_manifest.json".to_string(),
+            serde_json::json!({ "content": serde_json::json!({ "parts": chunks.len() }).to_string() }),
+        );
+        for (i, chunk) in chunks.iter().enumerate() {
+            files.insert(
+                format!("helium_sync_part_{:04}.bin", i),
+                serde_json::json!({ "content": *chunk }),
+            );
+        }
+    }
+
     let body = serde_json::json!({
         "description": "Helium Sync Backup",
         "public": false,
-        "files": {
-            "helium_sync_profile.bin": {
-                "content": b64_content
-            }
-        }
+        "files": files
     });
 
     if config.github_gist_id.is_empty() {
@@ -405,13 +466,16 @@ pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(
     Ok(())
 }
 
-// GitHub Gist Pull
+// GitHub Gist Pull (supports multi-part chunked payloads)
 pub async fn pull_github_gist(config: &mut Config) -> Result<Option<Vec<u8>>, String> {
     if config.github_token.is_empty() {
         return Err("GitHub Token not configured.".to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
     // If Gist ID is empty, search for it
     if config.github_gist_id.is_empty() {
@@ -464,13 +528,36 @@ pub async fn pull_github_gist(config: &mut Config) -> Result<Option<Vec<u8>>, St
 
     let gist_json: Value = res.json().await.map_err(|e| format!("Failed to parse Gist JSON: {}", e))?;
     let files = &gist_json["files"];
-    let content_b64 = files["helium_sync_profile.bin"]["content"].as_str()
-        .ok_or_else(|| "No backup file found in Gist.".to_string())?;
 
-    let decoded = BASE64_STANDARD.decode(content_b64)
-        .map_err(|e| format!("Base64 decoding error: {}", e))?;
+    // Check if this is a single-file or multi-part backup
+    if let Some(single_content) = files["helium_sync_profile.bin"]["content"].as_str() {
+        // Single-file backup (small profile)
+        let decoded = BASE64_STANDARD.decode(single_content)
+            .map_err(|e| format!("Base64 decoding error: {}", e))?;
+        return Ok(Some(decoded));
+    }
 
-    Ok(Some(decoded))
+    // Multi-part backup: read manifest and reassemble chunks
+    if let Some(manifest_str) = files["helium_sync_manifest.json"]["content"].as_str() {
+        let manifest: Value = serde_json::from_str(manifest_str)
+            .map_err(|e| format!("Failed to parse manifest: {}", e))?;
+        let parts = manifest["parts"].as_u64()
+            .ok_or_else(|| "Invalid manifest: missing parts count.".to_string())? as usize;
+
+        let mut combined_b64 = String::new();
+        for i in 0..parts {
+            let part_name = format!("helium_sync_part_{:04}.bin", i);
+            let part_content = files[&part_name]["content"].as_str()
+                .ok_or_else(|| format!("Missing chunk file: {}", part_name))?;
+            combined_b64.push_str(part_content);
+        }
+
+        let decoded = BASE64_STANDARD.decode(&combined_b64)
+            .map_err(|e| format!("Base64 decoding error (multi-part): {}", e))?;
+        return Ok(Some(decoded));
+    }
+
+    Err("No backup file found in Gist.".to_string())
 }
 
 // Main Sync trigger (Push)

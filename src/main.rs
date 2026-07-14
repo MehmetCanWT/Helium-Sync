@@ -29,19 +29,19 @@ async fn main() {
 
     // Define bind address
     let addr = SocketAddr::from(([127, 0, 0, 1], 8384));
-    add_log(&format!("Web UI sunucusu başlatılıyor: http://{}", addr));
+    add_log(&format!("Web UI server starting: http://{}", addr));
 
     // Bind TcpListener
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[CRITICAL] Sunucu adrese bağlanamadı (port {} dolu olabilir): {}", addr, e);
+            eprintln!("[CRITICAL] Server failed to bind to address (port {} may be in use): {}", addr, e);
             std::process::exit(1);
         }
     };
 
     // Run Axum server
     if let Err(e) = axum::serve(listener, app).await {
-        eprintln!("[CRITICAL] Sunucu hatası: {}", e);
+        eprintln!("[CRITICAL] Server error: {}", e);
     }
 }

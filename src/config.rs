@@ -68,17 +68,17 @@ pub fn load_config() -> Config {
 }
 
 pub fn save_config(config: &Config) -> Result<(), String> {
-    let dir = get_config_dir().ok_or("Config dizini bulunamadı.")?;
-    create_dir_all(&dir).map_err(|e| format!("Dizin oluşturulamadı: {}", e))?;
+    let dir = get_config_dir().ok_or("Config directory not found.")?;
+    create_dir_all(&dir).map_err(|e| format!("Failed to create directory: {}", e))?;
     
-    let path = get_config_path().ok_or("Config yolu bulunamadı.")?;
-    let mut file = File::create(&path).map_err(|e| format!("Dosya oluşturulamadı: {}", e))?;
+    let path = get_config_path().ok_or("Config path not found.")?;
+    let mut file = File::create(&path).map_err(|e| format!("Failed to create file: {}", e))?;
     
     let serialized = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("JSON serileştirme hatası: {}", e))?;
+        .map_err(|e| format!("JSON serialization error: {}", e))?;
     
     file.write_all(serialized.as_bytes())
-        .map_err(|e| format!("Yazma hatası: {}", e))?;
+        .map_err(|e| format!("Write error: {}", e))?;
     
     Ok(())
 }
