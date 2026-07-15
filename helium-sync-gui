@@ -252,7 +252,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         title_layout = QtWidgets.QVBoxLayout()
         title_label = QtWidgets.QLabel("Helium Sync")
         title_label.setObjectName("titleLabel")
-        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.4.0")
+        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.5.0")
         self.subtitle_label.setObjectName("subtitleLabel")
         title_layout.addWidget(title_label)
         title_layout.addWidget(self.subtitle_label)
@@ -520,7 +520,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             return
 
         # Update Header version
-        app_ver = status_data.get("app_version", "0.4.0")
+        app_ver = status_data.get("app_version", "0.5.0")
         self.subtitle_label.setText(f"Cloud Synchronizer & DRM Fixer • v{app_ver}")
 
         # Update Cards

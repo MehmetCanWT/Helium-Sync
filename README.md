@@ -1,9 +1,9 @@
 # Helium Sync
 
 <div align="center">
-  <img src="frontend/src/assets/logo.png" alt="Helium Sync Logo" width="120" height="120" style="border-radius: 24px;" />
+  <img src="aur/helium-sync.png" alt="Helium Sync Logo" width="120" height="120" style="border-radius: 24px;" />
   <h3>Cloud Synchronization Daemon & Widevine DRM Fixer for Helium Browser</h3>
-  <p><i>A sleek, lightweight, background service written in Rust with an embedded glassmorphic web dashboard.</i></p>
+  <p><i>A sleek, lightweight, background service written in Rust with a premium PyQt6 desktop GUI app.</i></p>
 </div>
 
 ---
@@ -17,7 +17,7 @@
 - **🌐 Supported Storage Providers:**
   - **GitHub Gist:** Backup your encrypted profile data directly to a private Gist on your GitHub account.
   - **WebDAV:** Connect to self-hosted Nextcloud, ownCloud, or any WebDAV-compliant storage.
-- **⚡ Sleek Web Dashboard:** Manage configurations, run manual backups, check real-time daemon logs, or trigger the DRM fixer with one click via an embedded Helium-inspired neon dark-mode web page at `http://localhost:8384`.
+- **⚡ Sleek Desktop GUI:** Manage configurations, run manual backups, check real-time daemon logs, or trigger the DRM fixer with one click via a native dark-mode PyQt6 application launcher. Closing the app window hides it to the system tray, keeping the background sync service active!
 
 ---
 
@@ -40,7 +40,7 @@
 2. Click **Generate new token (classic)**.
 3. Give it a name (e.g., `Helium Sync Token`) and select the **`gist`** scope checkbox.
 4. Click **Generate token** and copy the resulting string (`ghp_...`).
-5. Open your Helium Sync Dashboard at `http://localhost:8384`, navigate to the **Settings** tab, and select **GitHub Gist**.
+5. Launch the **Helium Sync** desktop app, navigate to the **Settings** tab, and select **GitHub Gist**.
 6. Paste your Personal Access Token (PAT) into the field.
 7. *Optional:* Leave the **Gist ID** field empty. Helium Sync will automatically create a new private Gist for you on the first synchronization and save the Gist ID to your configuration.
 8. Click **Save Configurations**.
@@ -50,7 +50,7 @@
 ### ☁️ WebDAV Configuration (Nextcloud / ownCloud)
 1. Open your cloud interface (e.g., Nextcloud) and navigate to **Personal Settings** -> **Security**.
 2. Under **Devices & sessions**, generate an **App password** (e.g., named `Helium Sync`). Copy the username and generated password.
-3. Open your Helium Sync Dashboard -> **Settings** tab -> select **WebDAV**.
+3. Launch the **Helium Sync** desktop app -> **Settings** tab -> select **WebDAV**.
 4. Fill in the following fields:
    - **Server Endpoint URL:** The WebDAV URL provided by your server (e.g., `https://nextcloud.example.com/remote.php/dav/files/username/`).
    - **Username:** Your cloud account username.
@@ -67,9 +67,9 @@
 #### Option 1: Install from AUR (Arch Linux / CachyOS / Manjaro)
 If you are on an Arch-based system, install using your favorite AUR helper:
 ```bash
-yay -S helium-sync
+paru -S helium-sync
 ```
-This automatically installs the executable and registers the user systemd service.
+This automatically installs the daemon executable, PyQt6 GUI application, desktop launcher entry, and registers the user systemd service.
 
 #### Option 2: Build from Source
 ```bash
@@ -77,12 +77,10 @@ This automatically installs the executable and registers the user systemd servic
 git clone https://github.com/MehmetCanWT/Helium-Sync.git
 cd Helium-Sync
 
-# Build the embedded web frontend
-cd frontend && npm install && npm run build && cd ..
-
 # Build backend
 cargo build --release
 cp target/release/helium-sync-daemon ~/.local/bin/
+cp helium-sync-gui ~/.local/bin/
 ```
 
 #### Autostart & Managing with systemd (User Space)
@@ -106,20 +104,10 @@ systemctl --user stop helium-sync
 
 ---
 
-### 🪟 Windows Installation
-
-1. Go to the **Releases** tab on GitHub and download `helium-sync-daemon-windows.exe`.
-2. Move the executable to a permanent directory (e.g., `C:\Program Files\Helium Sync\`).
-3. Press `Win + R`, type `shell:startup`, and press Enter to open the Windows **Startup** folder.
-4. Right-click inside the Startup folder, choose **New -> Shortcut**, and select your `helium-sync-daemon-windows.exe` file.
-5. Helium Sync will now run automatically in the background when you log into Windows!
-
----
-
 ## 🙋 Troubleshooting & Feedback
 
 If you encounter any bugs, synchronization errors, or have feature requests:
-- Please check the **Logs** tab in the web panel for descriptive error readouts.
+- Please check the **Logs** tab in the desktop application for descriptive error readouts.
 - Open a detailed issue on our **[GitHub Issue Tracker](https://github.com/MehmetCanWT/Helium-Sync/issues)**. 
 
 Contributions and PRs are always welcome!
