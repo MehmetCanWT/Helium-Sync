@@ -39,7 +39,7 @@ pub fn is_helium_running() -> bool {
     
     for process in sys.processes().values() {
         let name = process.name().to_lowercase();
-        if name.contains("helium") {
+        if name == "helium" || name == "helium-browser" {
             return true;
         }
     }

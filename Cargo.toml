@@ -1,14 +1,12 @@
 [package]
 name = "helium-sync-daemon"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
 axum = { version = "0.7.5" }
 tower-http = { version = "0.5.2", features = ["cors", "trace"] }
-rust-embed = { version = "8.4" }
-mime_guess = "2.0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }

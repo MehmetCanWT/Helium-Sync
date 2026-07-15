@@ -1,20 +1,15 @@
 use axum::{
-    http::{header, StatusCode, Uri},
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
-use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{load_config, save_config, Config};
 use crate::drm::{check_drm_status, fix_drm};
 use crate::sync::{get_helium_profile_dir, trigger_push, trigger_pull};
 use crate::watcher::{add_log, get_logs, is_helium_running};
-
-#[derive(RustEmbed)]
-#[folder = "frontend/dist"]
-struct Assets;
 
 #[derive(Serialize)]
 struct StatusResponse {
@@ -54,37 +49,6 @@ pub fn create_router() -> Router {
         .route("/api/restore", post(post_restore_handler))
         .route("/api/fix-drm", post(post_fix_drm_handler))
         .route("/api/logs", get(get_logs_handler))
-        .fallback(static_handler)
-}
-
-// Serve embedded React static assets
-async fn static_handler(uri: Uri) -> impl IntoResponse {
-    let mut path = uri.path().trim_start_matches('/').to_string();
-    if path.is_empty() {
-        path = "index.html".to_string();
-    }
-
-    match Assets::get(&path) {
-        Some(content) => {
-            let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            (
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content.data.into_owned(),
-            ).into_response()
-        }
-        None => {
-            // SPA fallback: return index.html for unknown client-side routes
-            match Assets::get("index.html") {
-                Some(content) => {
-                    (
-                        [(header::CONTENT_TYPE, "text/html")],
-                        content.data.into_owned(),
-                    ).into_response()
-                }
-                None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
-            }
-        }
-    }
 }
 
 // GET /api/status

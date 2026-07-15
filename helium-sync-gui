@@ -1,0 +1,718 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import os
+import json
+import time
+import urllib.request
+import urllib.parse
+import subprocess
+from typing import Dict, Any
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+# Configuration
+PORT = 8384
+API_URL = f"http://127.0.0.1:{PORT}/api"
+ICON_PATH = "/usr/share/pixmaps/helium-sync.png"
+
+# Premium Dark Stylesheet
+STYLESHEET = """
+QMainWindow {
+    background-color: #0C0C10;
+}
+QWidget {
+    font-family: "Outfit", "Inter", "Segoe UI", sans-serif;
+    color: #E2E8F0;
+    font-size: 10pt;
+}
+QLabel {
+    color: #94A3B8;
+}
+QLabel#titleLabel {
+    color: #FFFFFF;
+    font-weight: 800;
+    font-size: 16pt;
+}
+QLabel#subtitleLabel {
+    color: #818CF8;
+    font-weight: 600;
+    font-size: 9pt;
+}
+QTabWidget::pane {
+    border: 1px solid #1E293B;
+    background-color: #0F172A;
+    border-radius: 12px;
+}
+QTabBar::tab {
+    background-color: #0F172A;
+    color: #94A3B8;
+    border: 1px solid #1E293B;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 10px 20px;
+    margin-right: 4px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    background-color: #1E293B;
+    color: #FFFFFF;
+}
+QTabBar::tab:selected {
+    background-color: #1E1B4B;
+    color: #818CF8;
+    border-color: #4F46E5;
+    border-bottom: 2px solid #818CF8;
+}
+QGroupBox {
+    background-color: #1E1B4B;
+    border: 1px solid #312E81;
+    border-radius: 12px;
+    margin-top: 12px;
+    padding-top: 16px;
+    font-weight: 700;
+    color: #FFFFFF;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 4px;
+}
+QLineEdit, QComboBox {
+    background-color: #0F172A;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #F8FAFC;
+}
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #818CF8;
+}
+QPushButton {
+    background-color: #4F46E5;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 20px;
+    color: #FFFFFF;
+    font-weight: 700;
+}
+QPushButton:hover {
+    background-color: #6366F1;
+}
+QPushButton:pressed {
+    background-color: #4338CA;
+}
+QPushButton:disabled {
+    background-color: #1E293B;
+    color: #64748B;
+}
+QPushButton#actionButtonSync {
+    background-color: #7C3AED;
+}
+QPushButton#actionButtonSync:hover {
+    background-color: #8B5CF6;
+}
+QPushButton#actionButtonRestore {
+    background-color: #0891B2;
+}
+QPushButton#actionButtonRestore:hover {
+    background-color: #06B6D4;
+}
+QPushButton#fixDrmBtn {
+    background-color: #D97706;
+}
+QPushButton#fixDrmBtn:hover {
+    background-color: #F59E0B;
+}
+QPlainTextEdit {
+    background-color: #020617;
+    border: 1px solid #1E293B;
+    border-radius: 8px;
+    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+    font-size: 9.5pt;
+    color: #34D399;
+}
+QScrollBar:vertical {
+    border: none;
+    background: #0F172A;
+    width: 8px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical {
+    background: #334155;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #475569;
+}
+"""
+
+def is_daemon_running() -> bool:
+    try:
+        response = urllib.request.urlopen(f"{API_URL}/status", timeout=1)
+        return response.getcode() == 200
+    except Exception:
+        return False
+
+def start_daemon():
+    try:
+        subprocess.run(["systemctl", "--user", "start", "helium-sync"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    for _ in range(6):
+        if is_daemon_running():
+            return True
+        time.sleep(0.5)
+    try:
+        subprocess.Popen(["helium-sync-daemon"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    for _ in range(6):
+        if is_daemon_running():
+            return True
+        time.sleep(0.5)
+    return False
+
+def api_get(endpoint: str) -> Optional[Dict[str, Any]]:
+    try:
+        response = urllib.request.urlopen(f"{API_URL}/{endpoint}", timeout=2)
+        return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+def api_post(endpoint: str, data: Optional[Dict[str, Any]] = None) -> bool:
+    try:
+        req_data = json.dumps(data).encode("utf-8") if data else b""
+        req = urllib.request.Request(
+            f"{API_URL}/{endpoint}",
+            data=req_data,
+            headers={"Content-Type": "application/json"} if data else {}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return response.getcode() == 200
+    except Exception as e:
+        print(f"API POST Error ({endpoint}):", e)
+        return False
+
+class HeliumSyncGUI(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Helium Sync")
+        self.resize(920, 680)
+        self.setStyleSheet(STYLESHEET)
+
+        # Center on screen
+        qr = self.frameGeometry()
+        cp = self.screen().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
+
+        if os.path.exists(ICON_PATH):
+            self.setWindowIcon(QtGui.QIcon(ICON_PATH))
+
+        self.setup_ui()
+        self.setup_tray()
+        
+        # Timers
+        self.status_timer = QtCore.QTimer()
+        self.status_timer.timeout.connect(self.refresh_status)
+        self.status_timer.start(3000)
+
+        self.log_timer = QtCore.QTimer()
+        self.log_timer.timeout.connect(self.refresh_logs)
+        self.log_timer.start(2000)
+
+        # Initial loads
+        self.refresh_status()
+        self.load_settings()
+        self.refresh_logs()
+
+    def setup_ui(self):
+        # Central widget and layout
+        central_widget = QtWidgets.QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QtWidgets.QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
+
+        # Top Header Card
+        header_widget = QtWidgets.QWidget()
+        header_layout = QtWidgets.QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        logo_label = QtWidgets.QLabel()
+        if os.path.exists(ICON_PATH):
+            logo_pix = QtGui.QPixmap(ICON_PATH).scaled(48, 48, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            logo_label.setPixmap(logo_pix)
+        header_layout.addWidget(logo_label)
+
+        title_layout = QtWidgets.QVBoxLayout()
+        title_label = QtWidgets.QLabel("Helium Sync")
+        title_label.setObjectName("titleLabel")
+        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.4.0")
+        self.subtitle_label.setObjectName("subtitleLabel")
+        title_layout.addWidget(title_label)
+        title_layout.addWidget(self.subtitle_label)
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch()
+        
+        main_layout.addWidget(header_widget)
+
+        # Tabs Layout
+        self.tabs = QtWidgets.QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        # ─── TAB 1: STATUS ───
+        status_tab = QtWidgets.QWidget()
+        status_layout = QtWidgets.QVBoxLayout(status_tab)
+        status_layout.setContentsMargins(15, 15, 15, 15)
+        status_layout.setSpacing(15)
+
+        # Status Cards Container
+        cards_widget = QtWidgets.QWidget()
+        cards_layout = QtWidgets.QGridLayout(cards_widget)
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+        cards_layout.setSpacing(15)
+
+        self.card_provider = self.create_status_card("Cloud Provider", "Not configured")
+        self.card_time = self.create_status_card("Last Synchronized", "Never synchronized")
+        self.card_size = self.create_status_card("Last Backup Size", "0 Bytes")
+        self.card_encryption = self.create_status_card("Local Encryption", "Disabled")
+
+        cards_layout.addWidget(self.card_provider, 0, 0)
+        cards_layout.addWidget(self.card_time, 0, 1)
+        cards_layout.addWidget(self.card_size, 1, 0)
+        cards_layout.addWidget(self.card_encryption, 1, 1)
+        status_layout.addWidget(cards_widget)
+
+        # Warnings / Status Banner
+        self.warn_banner = QtWidgets.QLabel()
+        self.warn_banner.setWordWrap(True)
+        self.warn_banner.setStyleSheet(
+            "background-color: rgba(217, 119, 6, 0.15); border: 1px solid #D97706; "
+            "border-radius: 8px; padding: 12px; color: #F59E0B; font-weight: 600;"
+        )
+        self.warn_banner.hide()
+        status_layout.addWidget(self.warn_banner)
+
+        # Actions Card
+        actions_group = QtWidgets.QGroupBox("Manual Controls")
+        actions_layout = QtWidgets.QHBoxLayout(actions_group)
+        actions_layout.setContentsMargins(15, 20, 15, 15)
+        actions_layout.setSpacing(15)
+
+        self.btn_sync = QtWidgets.QPushButton("Sync Now (Push)")
+        self.btn_sync.setObjectName("actionButtonSync")
+        self.btn_sync.clicked.connect(self.trigger_sync)
+
+        self.btn_restore = QtWidgets.QPushButton("Restore Now (Pull)")
+        self.btn_restore.setObjectName("actionButtonRestore")
+        self.btn_restore.clicked.connect(self.trigger_restore)
+
+        self.btn_fix_drm = QtWidgets.QPushButton("Fix DRM (Widevine)")
+        self.btn_fix_drm.setObjectName("fixDrmBtn")
+        self.btn_fix_drm.clicked.connect(self.trigger_fix_drm)
+
+        actions_layout.addWidget(self.btn_sync)
+        actions_layout.addWidget(self.btn_restore)
+        actions_layout.addWidget(self.btn_fix_drm)
+        status_layout.addWidget(actions_group)
+        status_layout.addStretch()
+
+        self.tabs.addTab(status_tab, "Status")
+
+        # ─── TAB 2: SETTINGS ───
+        settings_tab = QtWidgets.QWidget()
+        settings_scroll = QtWidgets.QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        settings_scroll.setStyleSheet("background: transparent;")
+        
+        settings_container = QtWidgets.QWidget()
+        settings_layout = QtWidgets.QVBoxLayout(settings_container)
+        settings_layout.setContentsMargins(15, 15, 15, 15)
+        settings_layout.setSpacing(15)
+
+        # Provider Selector Group
+        prov_group = QtWidgets.QGroupBox("Storage Provider")
+        prov_layout = QtWidgets.QVBoxLayout(prov_group)
+        prov_layout.setContentsMargins(15, 15, 15, 15)
+        self.combo_provider = QtWidgets.QComboBox()
+        self.combo_provider.addItems(["None", "GitHub Gist", "WebDAV"])
+        self.combo_provider.currentIndexChanged.connect(self.toggle_provider_fields)
+        prov_layout.addWidget(self.combo_provider)
+        settings_layout.addWidget(prov_group)
+
+        # Profile Group
+        prof_group = QtWidgets.QGroupBox("Browser Profile Config")
+        prof_layout = QtWidgets.QHBoxLayout(prof_group)
+        prof_layout.setContentsMargins(15, 15, 15, 15)
+        self.input_profile = QtWidgets.QLineEdit()
+        self.input_profile.setPlaceholderText("Default location (empty)")
+        btn_browse = QtWidgets.QPushButton("Browse")
+        btn_browse.clicked.connect(self.browse_profile_path)
+        prof_layout.addWidget(self.input_profile)
+        prof_layout.addWidget(btn_browse)
+        settings_layout.addWidget(prof_group)
+
+        # GitHub Gist Settings
+        self.gist_group = QtWidgets.QGroupBox("GitHub Gist Credentials")
+        gist_layout = QtWidgets.QFormLayout(self.gist_group)
+        gist_layout.setContentsMargins(15, 15, 15, 15)
+        gist_layout.setVerticalSpacing(10)
+        self.input_token = QtWidgets.QLineEdit()
+        self.input_token.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.input_gist_id = QtWidgets.QLineEdit()
+        self.input_gist_id.setPlaceholderText("Will auto-create private Gist if empty")
+        gist_layout.addRow("Personal Access Token (with gist scope):", self.input_token)
+        gist_layout.addRow("Existing Gist ID (Optional):", self.input_gist_id)
+        settings_layout.addWidget(self.gist_group)
+
+        # WebDAV Settings
+        self.webdav_group = QtWidgets.QGroupBox("WebDAV Storage Credentials")
+        webdav_layout = QtWidgets.QFormLayout(self.webdav_group)
+        webdav_layout.setContentsMargins(15, 15, 15, 15)
+        webdav_layout.setVerticalSpacing(10)
+        self.input_wd_url = QtWidgets.QLineEdit()
+        self.input_wd_user = QtWidgets.QLineEdit()
+        self.input_wd_pass = QtWidgets.QLineEdit()
+        self.input_wd_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.input_wd_folder = QtWidgets.QLineEdit()
+        self.input_wd_folder.setText("helium-sync")
+        webdav_layout.addRow("WebDAV Server URL:", self.input_wd_url)
+        webdav_layout.addRow("WebDAV Username:", self.input_wd_user)
+        webdav_layout.addRow("WebDAV Password:", self.input_wd_pass)
+        webdav_layout.addRow("Target Folder:", self.input_wd_folder)
+        settings_layout.addWidget(self.webdav_group)
+
+        # Encryption Settings
+        enc_group = QtWidgets.QGroupBox("Backup Security (AES-256-GCM)")
+        enc_layout = QtWidgets.QVBoxLayout(enc_group)
+        enc_layout.setContentsMargins(15, 15, 15, 15)
+        enc_layout.setSpacing(10)
+        self.check_enc = QtWidgets.QCheckBox("Encrypt backup data locally before uploading")
+        self.check_enc.stateChanged.connect(self.toggle_encryption_fields)
+        
+        self.enc_pass_widget = QtWidgets.QWidget()
+        enc_pass_layout = QtWidgets.QHBoxLayout(self.enc_pass_widget)
+        enc_pass_layout.setContentsMargins(0, 0, 0, 0)
+        self.input_enc_pass = QtWidgets.QLineEdit()
+        self.input_enc_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.input_enc_pass.setPlaceholderText("Enter secure encryption passphrase")
+        enc_pass_layout.addWidget(QtWidgets.QLabel("Passphrase:"))
+        enc_pass_layout.addWidget(self.input_enc_pass)
+        
+        enc_layout.addWidget(self.check_enc)
+        enc_layout.addWidget(self.enc_pass_widget)
+        settings_layout.addWidget(enc_group)
+
+        # Save Button
+        btn_save = QtWidgets.QPushButton("Save Configurations")
+        btn_save.clicked.connect(self.save_settings)
+        settings_layout.addWidget(btn_save)
+
+        settings_scroll.setWidget(settings_container)
+        settings_layout_outer = QtWidgets.QVBoxLayout(settings_tab)
+        settings_layout_outer.addWidget(settings_scroll)
+        self.tabs.addTab(settings_tab, "Settings")
+
+        # ─── TAB 3: LOGS ───
+        logs_tab = QtWidgets.QWidget()
+        logs_layout = QtWidgets.QVBoxLayout(logs_tab)
+        logs_layout.setContentsMargins(15, 15, 15, 15)
+        logs_layout.setSpacing(12)
+
+        self.logs_view = QtWidgets.QPlainTextEdit()
+        self.logs_view.setReadOnly(True)
+        logs_layout.addWidget(self.logs_view)
+
+        logs_ctrl = QtWidgets.QHBoxLayout()
+        btn_clear = QtWidgets.QPushButton("Clear Console")
+        btn_clear.clicked.connect(self.clear_logs)
+        btn_ref = QtWidgets.QPushButton("Refresh Logs")
+        btn_ref.clicked.connect(self.refresh_logs)
+        logs_ctrl.addWidget(btn_clear)
+        logs_ctrl.addWidget(btn_ref)
+        logs_ctrl.addStretch()
+        logs_layout.addLayout(logs_ctrl)
+
+        self.tabs.addTab(logs_tab, "Logs")
+
+    def create_status_card(self, title: str, val: str) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        widget.setStyleSheet(
+            "background-color: #1E293B; border: 1px solid #334155; "
+            "border-radius: 10px; padding: 12px;"
+        )
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        title_lbl = QtWidgets.QLabel(title)
+        title_lbl.setStyleSheet("color: #94A3B8; font-weight: 500; font-size: 9pt;")
+        
+        val_lbl = QtWidgets.QLabel(val)
+        val_lbl.setStyleSheet("color: #FFFFFF; font-weight: 700; font-size: 11pt;")
+        
+        layout.addWidget(title_lbl)
+        layout.addWidget(val_lbl)
+        
+        # Reference labels to update dynamically
+        widget.title_lbl = title_lbl
+        widget.val_lbl = val_lbl
+        return widget
+
+    def setup_tray(self):
+        self.tray_icon = QtWidgets.QSystemTrayIcon(self)
+        if os.path.exists(ICON_PATH):
+            self.tray_icon.setIcon(QtGui.QIcon(ICON_PATH))
+        else:
+            self.tray_icon.setIcon(QtWidgets.QStyle.standardIcon(
+                self.style(), QtWidgets.QStyle.StandardPixmap.SP_ComputerIcon
+            ))
+
+        self.tray_menu = QtWidgets.QMenu()
+        show_action = QtGui.QAction("Open Settings App", self)
+        show_action.triggered.connect(self.show_normal_window)
+        
+        quit_action = QtGui.QAction("Quit Application", self)
+        quit_action.triggered.connect(self.quit_application)
+        
+        self.tray_menu.addAction(show_action)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(quit_action)
+        
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.show()
+        self.tray_icon.activated.connect(self.tray_icon_activated)
+
+    def show_normal_window(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def tray_icon_activated(self, reason):
+        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger:
+            self.show_normal_window()
+
+    def closeEvent(self, event: QtGui.QCloseEvent):
+        # Intercept close event to hide instead of quit
+        event.ignore()
+        self.hide()
+        self.tray_icon.showMessage(
+            "Helium Sync",
+            "Uygulama arka planda çalışmaya devam ediyor.",
+            QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+            2000
+        )
+
+    def quit_application(self):
+        self.tray_icon.hide()
+        QtWidgets.QApplication.quit()
+
+    # ─── LOGIC & API INTEGRATION ───
+
+    def refresh_status(self):
+        status_data = api_get("status")
+        if not status_data:
+            return
+
+        # Update Header version
+        app_ver = status_data.get("app_version", "0.4.0")
+        self.subtitle_label.setText(f"Cloud Synchronizer & DRM Fixer • v{app_ver}")
+
+        # Update Cards
+        provider = status_data.get("provider", "none")
+        provider_name = "None"
+        if provider == "github_gist":
+            provider_name = "GitHub Gist"
+        elif provider == "webdav":
+            provider_name = "WebDAV"
+        self.card_provider.val_lbl.setText(provider_name)
+
+        last_time = status_data.get("last_sync_time", "Never synchronized")
+        self.card_time.val_lbl.setText(last_time)
+
+        last_bytes = status_data.get("last_sync_size_bytes", 0)
+        self.card_size.val_lbl.setText(self.format_bytes(last_bytes))
+
+        enc = status_data.get("encryption_active", False)
+        self.card_encryption.val_lbl.setText("Enabled (AES-256)" if enc else "Disabled")
+        self.card_encryption.val_lbl.setStyleSheet(
+            "color: #34D399; font-weight: 700;" if enc else "color: #F59E0B; font-weight: 700;"
+        )
+
+        # Check Browser Running Warning
+        browser_run = status_data.get("browser_running", False)
+        if browser_run:
+            self.warn_banner.setText(
+                "⚠️ Warning: Helium Browser is currently running. "
+                "Manual synchronization or restore operations are DISABLED to prevent profile corruption. "
+                "Please close the browser first."
+            )
+            self.warn_banner.show()
+            self.btn_sync.setEnabled(False)
+            self.btn_restore.setEnabled(False)
+        else:
+            self.warn_banner.hide()
+            self.btn_sync.setEnabled(provider != "none")
+            self.btn_restore.setEnabled(provider != "none")
+
+    def format_bytes(self, num_bytes):
+        if num_bytes == 0:
+            return '0 Bytes'
+        for unit in ['Bytes', 'KB', 'MB', 'GB']:
+            if num_bytes < 1024.0:
+                return f"{num_bytes:.2f} {unit}"
+            num_bytes /= 1024.0
+        return f"{num_bytes:.2f} GB"
+
+    def refresh_logs(self):
+        log_data = api_get("logs")
+        if log_data and "logs" in log_data:
+            lines = log_data["logs"]
+            self.logs_view.setPlainText("\n".join(lines))
+            # Scroll to bottom
+            self.logs_view.verticalScrollBar().setValue(
+                self.logs_view.verticalScrollBar().maximum()
+            )
+
+    def clear_logs(self):
+        self.logs_view.clear()
+
+    def toggle_provider_fields(self, index):
+        provider = self.combo_provider.currentText()
+        if provider == "GitHub Gist":
+            self.gist_group.show()
+            self.webdav_group.hide()
+        elif provider == "WebDAV":
+            self.gist_group.hide()
+            self.webdav_group.show()
+        else:
+            self.gist_group.hide()
+            self.webdav_group.hide()
+
+    def toggle_encryption_fields(self, state):
+        self.enc_pass_widget.setVisible(state == 2) # 2 means checked
+
+    def browse_profile_path(self):
+        dir_path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Helium Profile Directory")
+        if dir_path:
+            self.input_profile.setText(dir_path)
+
+    def load_settings(self):
+        config = api_get("settings")
+        if not config:
+            return
+
+        provider = config.get("provider", "none")
+        if provider == "github_gist":
+            self.combo_provider.setCurrentText("GitHub Gist")
+        elif provider == "webdav":
+            self.combo_provider.setCurrentText("WebDAV")
+        else:
+            self.combo_provider.setCurrentText("None")
+
+        self.input_profile.setText(config.get("profile_path", ""))
+        self.input_token.setText(config.get("github_token", ""))
+        self.input_gist_id.setText(config.get("github_gist_id", ""))
+        self.input_wd_url.setText(config.get("webdav_url", ""))
+        self.input_wd_user.setText(config.get("webdav_username", ""))
+        self.input_wd_pass.setText(config.get("webdav_password", ""))
+        self.input_wd_folder.setText(config.get("webdav_folder", "helium-sync"))
+
+        enc_active = config.get("encryption_active", False)
+        self.check_enc.setChecked(enc_active)
+        self.input_enc_pass.setText(config.get("encryption_password", ""))
+        self.enc_pass_widget.setVisible(enc_active)
+
+    def save_settings(self):
+        provider_text = self.combo_provider.currentText()
+        provider = "none"
+        if provider_text == "GitHub Gist":
+            provider = "github_gist"
+        elif provider_text == "WebDAV":
+            provider = "webdav"
+
+        payload = {
+            "provider": provider,
+            "profile_path": self.input_profile.text().strip(),
+            "github_token": self.input_token.text().strip(),
+            "github_gist_id": self.input_gist_id.text().strip(),
+            "webdav_url": self.input_wd_url.text().strip(),
+            "webdav_username": self.input_wd_user.text().strip(),
+            "webdav_password": self.input_wd_pass.text().strip(),
+            "webdav_folder": self.input_wd_folder.text().strip(),
+            "encryption_active": self.check_enc.isChecked(),
+            "encryption_password": self.input_enc_pass.text().strip(),
+        }
+
+        if api_post("settings", payload):
+            QtWidgets.QMessageBox.information(self, "Success", "Configuration settings saved successfully!")
+            self.refresh_status()
+        else:
+            QtWidgets.QMessageBox.critical(self, "Error", "Failed to save configuration settings.")
+
+    def trigger_sync(self):
+        if api_post("sync"):
+            QtWidgets.QMessageBox.information(self, "Success", "Manual synchronization (Push) triggered successfully!")
+            self.refresh_status()
+            self.refresh_logs()
+        else:
+            QtWidgets.QMessageBox.critical(self, "Error", "Failed to trigger manual synchronization.")
+
+    def trigger_restore(self):
+        reply = QtWidgets.QMessageBox.question(
+            self, "Restore Cloud Backup",
+            "Are you sure you want to download and restore the profile from cloud?\n"
+            "This will completely overwrite your current local browser profile!",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            if api_post("restore"):
+                QtWidgets.QMessageBox.information(self, "Success", "Manual restore (Pull) completed successfully!")
+                self.refresh_status()
+                self.refresh_logs()
+            else:
+                QtWidgets.QMessageBox.critical(self, "Error", "Failed to restore cloud backup.")
+
+    def trigger_fix_drm(self):
+        if api_post("fix-drm"):
+            QtWidgets.QMessageBox.information(self, "Success", "Widevine DRM fix applied successfully!")
+            self.refresh_status()
+            self.refresh_logs()
+        else:
+            QtWidgets.QMessageBox.critical(self, "Error", "Failed to apply Widevine DRM fix.")
+
+def main():
+    if not is_daemon_running():
+        start_daemon()
+
+    app = QtWidgets.QApplication(sys.argv)
+    app.setApplicationName("Helium Sync")
+    app.setStyle("Fusion")
+
+    # High Premium Dark Palette
+    palette = QtGui.QPalette()
+    palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#0C0C10"))
+    palette.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor("#FFFFFF"))
+    palette.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor("#0F172A"))
+    palette.setColor(QtGui.QPalette.ColorRole.AlternateBase, QtGui.QColor("#1E1B4B"))
+    palette.setColor(QtGui.QPalette.ColorRole.ToolTipBase, QtGui.QColor("#FFFFFF"))
+    palette.setColor(QtGui.QPalette.ColorRole.ToolTipText, QtGui.QColor("#FFFFFF"))
+    palette.setColor(QtGui.QPalette.ColorRole.Text, QtGui.QColor("#F8FAFC"))
+    palette.setColor(QtGui.QPalette.ColorRole.Button, QtGui.QColor("#1E1B4B"))
+    palette.setColor(QtGui.QPalette.ColorRole.ButtonText, QtGui.QColor("#FFFFFF"))
+    palette.setColor(QtGui.QPalette.ColorRole.BrightText, QtGui.QColor("#818CF8"))
+    palette.setColor(QtGui.QPalette.ColorRole.Highlight, QtGui.QColor("#4F46E5"))
+    palette.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor("#FFFFFF"))
+    app.setPalette(palette)
+
+    gui = HeliumSyncGUI()
+    gui.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

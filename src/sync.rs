@@ -124,6 +124,34 @@ fn is_whitelisted(rel_path: &str) -> bool {
         if file_part == "sync data" || file_part.starts_with("sync data/") {
             return true;
         }
+        // Allow Extensions/ directory and its contents
+        if file_part == "extensions" || file_part.starts_with("extensions/") {
+            return true;
+        }
+        // Allow Extension State/ directory and its contents
+        if file_part == "extension state" || file_part.starts_with("extension state/") {
+            return true;
+        }
+        // Allow Extension Rules/ directory and its contents
+        if file_part == "extension rules" || file_part.starts_with("extension rules/") {
+            return true;
+        }
+        // Allow Extension Scripts/ directory and its contents
+        if file_part == "extension scripts" || file_part.starts_with("extension scripts/") {
+            return true;
+        }
+        // Allow Local Extension Settings/ directory and its contents
+        if file_part == "local extension settings" || file_part.starts_with("local extension settings/") {
+            return true;
+        }
+        // Allow Sync Extension Settings/ directory and its contents
+        if file_part == "sync extension settings" || file_part.starts_with("sync extension settings/") {
+            return true;
+        }
+        // Allow Managed Extension Settings/ directory and its contents
+        if file_part == "managed extension settings" || file_part.starts_with("managed extension settings/") {
+            return true;
+        }
     }
 
     false
