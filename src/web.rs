@@ -15,16 +15,19 @@ use crate::watcher::{add_log, get_logs, is_helium_running};
 struct StatusResponse {
     provider: String,
     github_connected: bool,
-    github_gist_id: String,
     webdav_url: String,
     last_sync_time: String,
     last_sync_size_bytes: u64,
+    estimated_size_bytes: u64,
     encryption_active: bool,
     browser_running: bool,
     drm_status: String,
     profile_path: String,
     platform: String,
     app_version: String,
+    sync_bookmarks_history: bool,
+    sync_extensions: bool,
+    sync_extension_databases: bool,
 }
 
 #[derive(Deserialize)]
@@ -38,7 +41,9 @@ struct SettingsRequest {
     encryption_password: String,
     profile_path: String,
     github_token: String,
-    github_gist_id: String,
+    sync_bookmarks_history: bool,
+    sync_extensions: bool,
+    sync_extension_databases: bool,
 }
 
 pub fn create_router() -> Router {
@@ -67,19 +72,24 @@ async fn get_status_handler() -> Json<StatusResponse> {
         "other".to_string()
     };
 
+    let estimated_size_bytes = crate::sync::calculate_estimated_size(&config);
+
     Json(StatusResponse {
         provider: config.provider,
         github_connected: !config.github_token.is_empty(),
-        github_gist_id: config.github_gist_id,
         webdav_url: config.webdav_url,
         last_sync_time: config.last_sync_time,
         last_sync_size_bytes: config.last_sync_size_bytes,
+        estimated_size_bytes,
         encryption_active: config.encryption_active,
         browser_running: is_helium_running(),
         drm_status: check_drm_status(),
         profile_path,
         platform,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
+        sync_bookmarks_history: config.sync_bookmarks_history,
+        sync_extensions: config.sync_extensions,
+        sync_extension_databases: config.sync_extension_databases,
     })
 }
 
@@ -100,7 +110,9 @@ async fn post_settings_handler(Json(payload): Json<SettingsRequest>) -> impl Int
     config.encryption_password = payload.encryption_password;
     config.profile_path = payload.profile_path;
     config.github_token = payload.github_token;
-    config.github_gist_id = payload.github_gist_id;
+    config.sync_bookmarks_history = payload.sync_bookmarks_history;
+    config.sync_extensions = payload.sync_extensions;
+    config.sync_extension_databases = payload.sync_extension_databases;
 
     match save_config(&config) {
         Ok(_) => {
@@ -193,5 +205,3 @@ async fn post_stop_browser_handler() -> impl IntoResponse {
     crate::watcher::stop_helium();
     StatusCode::OK
 }
-
-

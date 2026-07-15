@@ -94,16 +94,13 @@ pub fn fix_drm() -> Result<(), String> {
 
     let dest_base = dest_wv_dir.join(&version);
 
-    // If something exists at dest_base, remove it to prevent conflicts
-    if dest_base.symlink_metadata().is_ok() {
-        if let Ok(metadata) = dest_base.symlink_metadata() {
-            if metadata.is_dir() && !metadata.is_symlink() {
-                std::fs::remove_dir_all(&dest_base)
-                    .map_err(|e| format!("Failed to remove old Widevine directory: {}", e))?;
-            } else {
-                std::fs::remove_file(&dest_base)
-                    .map_err(|e| format!("Failed to remove old Widevine file/symlink: {}", e))?;
-            }
+    if let Ok(metadata) = dest_base.symlink_metadata() {
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            std::fs::remove_dir_all(&dest_base)
+                .map_err(|e| format!("Failed to remove old Widevine directory: {}", e))?;
+        } else {
+            std::fs::remove_file(&dest_base)
+                .map_err(|e| format!("Failed to remove old Widevine file/symlink: {}", e))?;
         }
     }
 

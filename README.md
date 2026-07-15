@@ -1,4 +1,4 @@
-# Helium Sync
+# Helium Sync(IN DEVELOPMENT)
 
 <div align="center">
   <img src="aur/helium-sync.png" alt="Helium Sync Logo" width="120" height="120" style="border-radius: 24px;" />
@@ -15,35 +15,22 @@
 - **🔗 Symbolic Link DRM Fixer:** Integrates Widevine DRM on Linux systems by creating symbolic links (`symlinks`) directly to your system's Google Chrome or Brave Widevine directories. **When your system Chrome or Brave gets updated, Helium's Widevine CDM automatically updates with it!**
 - **🔒 AES-256-GCM Local Encryption:** Keep your data private. Encrypt your profile backups locally with a password before they leave your machine.
 - **🌐 Supported Storage Providers:**
-  - **GitHub Gist:** Backup your encrypted profile data directly to a private Gist on your GitHub account.
+  - **GitHub Releases:** Automatically and privately upload your profile backup as a release asset on your GitHub account (supports files up to 2 GB).
   - **WebDAV:** Connect to self-hosted Nextcloud, ownCloud, or any WebDAV-compliant storage.
 - **⚡ Sleek Desktop GUI:** Manage configurations, run manual backups, check real-time daemon logs, or trigger the DRM fixer with one click via a native dark-mode PyQt6 application launcher. Closing the app window hides it to the system tray, keeping the background sync service active!
 
 ---
 
-## 🚨 Critical Security Warning (GitHub Gist)
-
-> [!CAUTION]
-> ### KEEP YOUR BACKUPS PRIVATE!
-> When configuring the **GitHub Gist** provider, Helium Sync creates a private Gist under your account. 
-> 
-> **DO NOT** edit this Gist to make it **Public**. If your Gist is set to Public, anyone on the internet can download your backup file. If you have disabled local encryption, they can easily steal your browser session cookies, active logins, history, and passwords.
-> 
-> Always keep **Local Encryption** enabled with a strong passphrase for maximum security!
-
----
-
 ## 🛠️ Configuration Guides
 
-### 🐱 GitHub Gist Configuration
+### 🚀 GitHub Releases Configuration (Recommended for all backups)
 1. Go to your GitHub account: **Settings** -> **Developer Settings** -> **Personal Access Tokens** -> **Tokens (classic)**.
 2. Click **Generate new token (classic)**.
-3. Give it a name (e.g., `Helium Sync Token`) and select the **`gist`** scope checkbox.
+3. Give it a name (e.g., `Helium Sync Releases`) and select the **`repo`** scope checkbox (this grants write access to private repositories and releases, allowing files up to 2 GB).
 4. Click **Generate token** and copy the resulting string (`ghp_...`).
-5. Launch the **Helium Sync** desktop app, navigate to the **Settings** tab, and select **GitHub Gist**.
+5. Launch the **Helium Sync** desktop app, navigate to the **Settings** tab, and select **GitHub Releases**.
 6. Paste your Personal Access Token (PAT) into the field.
-7. *Optional:* Leave the **Gist ID** field empty. Helium Sync will automatically create a new private Gist for you on the first synchronization and save the Gist ID to your configuration.
-8. Click **Save Configurations**.
+7. Click **Save Configurations**.
 
 ---
 

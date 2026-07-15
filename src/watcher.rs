@@ -7,7 +7,7 @@ use sysinfo::System;
 use crate::config::load_config;
 use crate::sync::{trigger_pull, trigger_push};
 
-// Global log buffer for Web UI
+// Global log buffer for GUI client
 static LOG_BUFFER: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
 pub fn get_logs() -> Vec<String> {

@@ -11,7 +11,6 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use pbkdf2::pbkdf2_hmac;
 use sha2::Sha256;
 use rand::{RngCore, thread_rng};
-use base64::prelude::*;
 
 use crate::config::Config;
 
@@ -57,7 +56,7 @@ pub fn get_helium_profile_dir(config: &Config) -> Option<PathBuf> {
 
 // Whitelist: Only sync essential browser profile data.
 // This drastically reduces sync size from ~200MB to ~1-2MB, making sync near-instant.
-fn is_whitelisted(rel_path: &str) -> bool {
+fn is_whitelisted(rel_path: &str, config: &Config) -> bool {
     let lower = rel_path.to_lowercase();
 
     // Top-level files that store critical state
@@ -74,91 +73,93 @@ fn is_whitelisted(rel_path: &str) -> bool {
     if lower.starts_with("default/") {
         let file_part = &lower["default/".len()..];
 
-        let essential_files = [
-            "bookmarks",
-            "bookmarks.bak",
-            "cookies",
-            "cookies-journal",
-            "login data",
-            "login data-journal",
-            "login data for account",
-            "login data for account-journal",
-            "web data",
-            "web data-journal",
-            "preferences",
-            "secure preferences",
-            "history",
-            "history-journal",
-            "favicons",
-            "favicons-journal",
-            "top sites",
-            "top sites-journal",
-            "shortcuts",
-            "shortcuts-journal",
-            "network persistent state",
-            "transportsecurity",
-            "affiliation database",
-            "affiliation database-journal",
-            "extension cookies",
-            "extension cookies-journal",
-        ];
+        // 1. Bookmarks & History & Logins & Preferences & Cookies
+        if config.sync_bookmarks_history {
+            let essential_files = [
+                "bookmarks",
+                "bookmarks.bak",
+                "cookies",
+                "cookies-journal",
+                "login data",
+                "login data-journal",
+                "login data for account",
+                "login data for account-journal",
+                "web data",
+                "web data-journal",
+                "preferences",
+                "secure preferences",
+                "history",
+                "history-journal",
+                "favicons",
+                "favicons-journal",
+                "top sites",
+                "top sites-journal",
+                "shortcuts",
+                "shortcuts-journal",
+                "network persistent state",
+                "transportsecurity",
+                "affiliation database",
+                "affiliation database-journal",
+            ];
 
-        // Direct file match
-        for f in &essential_files {
-            if file_part == *f {
+            // Direct file match
+            for f in &essential_files {
+                if file_part == *f {
+                    return true;
+                }
+            }
+
+            // Allow Local Storage/ directory and its contents
+            if file_part == "local storage" || file_part.starts_with("local storage/") {
+                return true;
+            }
+            // Allow Session Storage/ directory and its contents
+            if file_part == "session storage" || file_part.starts_with("session storage/") {
+                return true;
+            }
+            // Allow Sessions/ directory and its contents
+            if file_part == "sessions" || file_part.starts_with("sessions/") {
+                return true;
+            }
+            // Allow Sync Data/ directory
+            if file_part == "sync data" || file_part.starts_with("sync data/") {
                 return true;
             }
         }
 
-        // Allow Local Storage/ directory and its contents
-        if file_part == "local storage" || file_part.starts_with("local storage/") {
-            return true;
-        }
-        // Allow Session Storage/ directory and its contents
-        if file_part == "session storage" || file_part.starts_with("session storage/") {
-            return true;
-        }
-        // Allow Sessions/ directory and its contents
-        if file_part == "sessions" || file_part.starts_with("sessions/") {
-            return true;
-        }
-        // Allow Sync Data/ directory
-        if file_part == "sync data" || file_part.starts_with("sync data/") {
-            return true;
-        }
-        // Allow Extensions/ directory and its contents
-        if file_part == "extensions" || file_part.starts_with("extensions/") {
-            return true;
-        }
-        // Allow Extension State/ directory and its contents
-        if file_part == "extension state" || file_part.starts_with("extension state/") {
-            return true;
-        }
-        // Allow Extension Rules/ directory and its contents
-        if file_part == "extension rules" || file_part.starts_with("extension rules/") {
-            return true;
-        }
-        // Allow Extension Scripts/ directory and its contents
-        if file_part == "extension scripts" || file_part.starts_with("extension scripts/") {
-            return true;
-        }
-        // Allow Local Extension Settings/ directory and its contents
-        if file_part == "local extension settings" || file_part.starts_with("local extension settings/") {
-            return true;
-        }
-        // Allow Sync Extension Settings/ directory and its contents
-        if file_part == "sync extension settings" || file_part.starts_with("sync extension settings/") {
-            return true;
-        }
-        // Allow Managed Extension Settings/ directory and its contents
-        if file_part == "managed extension settings" || file_part.starts_with("managed extension settings/") {
-            return true;
-        }
-        // Allow IndexedDB/ chrome-extension directories and files
-        if file_part.starts_with("indexeddb/") {
-            let inner = &file_part["indexeddb/".len()..];
-            if inner.starts_with("chrome-extension_") {
+        // 2. Extension Installation files
+        if config.sync_extensions {
+            if file_part == "extensions" || file_part.starts_with("extensions/") {
                 return true;
+            }
+        }
+
+        // 3. Extension Settings & Local Databases & Extension Cookies
+        if config.sync_extension_databases {
+            // Extension cookies
+            if file_part == "extension cookies" || file_part == "extension cookies-journal" {
+                return true;
+            }
+            // Extension directories
+            let extension_dirs = [
+                "extension state",
+                "extension rules",
+                "extension scripts",
+                "local extension settings",
+                "sync extension settings",
+                "managed extension settings",
+            ];
+            for d in &extension_dirs {
+                if file_part == *d || file_part.starts_with(&format!("{}/", d)) {
+                    return true;
+                }
+            }
+            // Extension IndexedDB
+            if file_part.starts_with("indexeddb/") {
+                let inner = &file_part["indexeddb/".len()..];
+                if inner.starts_with("chrome-extension_") {
+                    return true;
+                }
             }
         }
     }
@@ -167,7 +168,7 @@ fn is_whitelisted(rel_path: &str) -> bool {
 }
 
 // Compression (Zip Profile) — only whitelisted essential files
-pub fn zip_profile(profile_dir: &Path) -> Result<Vec<u8>, String> {
+pub fn zip_profile(profile_dir: &Path, config: &Config) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     {
         let cursor = Cursor::new(&mut buf);
@@ -196,12 +197,12 @@ pub fn zip_profile(profile_dir: &Path) -> Result<Vec<u8>, String> {
 
                     if entry_path.is_dir() {
                         // Only descend into whitelisted directories
-                        if is_whitelisted(&rel_path) {
+                        if is_whitelisted(&rel_path, config) {
                             zip.add_directory(&rel_path, options)
                                 .map_err(|e| format!("Failed to add directory to zip: {}", e))?;
                             stack.push(entry_path);
                         }
-                    } else if entry_path.is_file() && is_whitelisted(&rel_path) {
+                    } else if entry_path.is_file() && is_whitelisted(&rel_path, config) {
                         zip.start_file(&rel_path, options)
                             .map_err(|e| format!("Failed to start file in zip: {}", e))?;
                         let mut file = File::open(&entry_path)
@@ -221,6 +222,44 @@ pub fn zip_profile(profile_dir: &Path) -> Result<Vec<u8>, String> {
         zip.finish().map_err(|e| format!("Failed to finish zip: {}", e))?;
     }
     Ok(buf)
+}
+
+// Calculate estimated backup size (bytes) based on current whitelist settings
+pub fn calculate_estimated_size(config: &Config) -> u64 {
+    let profile_dir = match get_helium_profile_dir(config) {
+        Some(p) => p,
+        None => return 0,
+    };
+    
+    let mut total_size = 0;
+    let mut stack = vec![profile_dir.clone()];
+    let prefix_len = profile_dir.to_string_lossy().len();
+    
+    while let Some(current_dir) = stack.pop() {
+        if let Ok(entries) = fs::read_dir(&current_dir) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                let rel_path = &entry_path.to_string_lossy()[prefix_len..];
+                let rel_path = rel_path.trim_start_matches('/').replace('\\', "/");
+                
+                if rel_path.is_empty() {
+                    continue;
+                }
+                
+                if entry_path.is_dir() {
+                    if is_whitelisted(&rel_path, config) {
+                        stack.push(entry_path);
+                    }
+                } else if entry_path.is_file() && is_whitelisted(&rel_path, config) {
+                    if let Ok(meta) = entry.metadata() {
+                        total_size += meta.len();
+                    }
+                }
+            }
+        }
+    }
+    
+    total_size
 }
 
 // Extraction (Unzip Profile)
@@ -305,8 +344,6 @@ pub fn decrypt_bytes(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>, S
         
     Ok(plaintext)
 }
-
-
 
 // WebDAV API helper to ensure parent directory exists
 async fn ensure_webdav_folder(client: &reqwest::Client, config: &Config) -> Result<(), String> {
@@ -396,278 +433,263 @@ pub async fn pull_webdav(config: &Config) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(data.to_vec()))
 }
 
-// Maximum size per Gist file chunk (~900KB base64 = ~675KB raw, well under the 1MB API limit)
-const GIST_CHUNK_SIZE: usize = 900_000;
-
-// GitHub Gist Push (with multi-part chunking and manifest metadata)
-pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(), String> {
+// GitHub Releases Push (streams raw binary data, no size limit, extremely fast)
+pub async fn push_github_releases(config: &mut Config, file_data: &[u8]) -> Result<(), String> {
     if config.github_token.is_empty() {
         return Err("GitHub Token not configured.".to_string());
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-    let b64_content = BASE64_STANDARD.encode(file_data);
-
-    // If Gist ID is empty, search for an existing one on GitHub
-    if config.github_gist_id.is_empty() {
-        let list_url = "https://api.github.com/gists";
-        let res = client.get(list_url)
-            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
-            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
-            .bearer_auth(&config.github_token)
-            .send()
-            .await
-            .map_err(|e| format!("Gist list error: {}", e))?;
-
-        if res.status().is_success() {
-            if let Ok(gists) = res.json::<Vec<Value>>().await {
-                for gist in gists {
-                    if gist["description"].as_str() == Some("Helium Sync Backup") {
-                        if let Some(id) = gist["id"].as_str() {
-                            config.github_gist_id = id.to_string();
-                            let _ = crate::config::save_config(config);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Fetch existing Gist to get the list of current files (so we can delete unused files)
-    let mut old_files = Vec::new();
-    if !config.github_gist_id.is_empty() {
-        let get_url = format!("https://api.github.com/gists/{}", config.github_gist_id);
-        let res = client.get(&get_url)
-            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
-            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
-            .bearer_auth(&config.github_token)
-            .send()
-            .await;
-        if let Ok(response) = res {
-            if response.status().is_success() {
-                if let Ok(gist_json) = response.json::<Value>().await {
-                    if let Some(files_map) = gist_json["files"].as_object() {
-                        for filename in files_map.keys() {
-                            if filename.starts_with("helium_sync_") {
-                                old_files.push(filename.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Create the manifest metadata
-    let mut files = serde_json::Map::new();
-    let app_version = env!("CARGO_PKG_VERSION");
-    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let parts_count = if b64_content.len() <= GIST_CHUNK_SIZE { 1 } else { (b64_content.len() + GIST_CHUNK_SIZE - 1) / GIST_CHUNK_SIZE };
-
-    let manifest_content = serde_json::json!({
-        "version": app_version,
-        "timestamp": timestamp,
-        "parts": parts_count,
-        "encrypted": config.encryption_active
-    });
-
-    files.insert(
-        "helium_sync_manifest.json".to_string(),
-        serde_json::json!({ "content": serde_json::to_string_pretty(&manifest_content).unwrap_or_default() }),
-    );
-
-    // Split b64 content into chunks
-    if b64_content.len() <= GIST_CHUNK_SIZE {
-        files.insert(
-            "helium_sync_profile.bin".to_string(),
-            serde_json::json!({ "content": b64_content }),
-        );
-    } else {
-        let chunks: Vec<&str> = b64_content
-            .as_bytes()
-            .chunks(GIST_CHUNK_SIZE)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
-            .collect();
-        for (i, chunk) in chunks.iter().enumerate() {
-            files.insert(
-                format!("helium_sync_part_{:04}.bin", i),
-                serde_json::json!({ "content": *chunk }),
-            );
-        }
-    }
-
-    // Mark old files that are no longer needed as null so GitHub deletes them
-    for old_file in old_files {
-        if !files.contains_key(&old_file) {
-            files.insert(old_file, serde_json::Value::Null);
-        }
-    }
-
-    let body = serde_json::json!({
-        "description": "Helium Sync Backup",
-        "public": false,
-        "files": files
-    });
-
-    if config.github_gist_id.is_empty() {
-        // Create new private Gist
-        let create_url = "https://api.github.com/gists";
-        let res = client.post(create_url)
-            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
-            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
-            .bearer_auth(&config.github_token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Gist creation error: {}", e))?;
-
-        let status = res.status();
-        if !status.is_success() {
-            let text = res.text().await.unwrap_or_default();
-            return Err(format!("Failed to create Gist (Status {}): {}", status, text));
-        }
-
-        let gist_json: Value = res.json().await.map_err(|e| format!("Failed to read Gist response: {}", e))?;
-        if let Some(id) = gist_json["id"].as_str() {
-            config.github_gist_id = id.to_string();
-            let _ = crate::config::save_config(config);
-        } else {
-            return Err("Failed to retrieve Gist ID.".to_string());
-        }
-    } else {
-        // Update existing Gist
-        let update_url = format!("https://api.github.com/gists/{}", config.github_gist_id);
-        let res = client.patch(&update_url)
-            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
-            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
-            .bearer_auth(&config.github_token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Gist update error: {}", e))?;
-
-        let status = res.status();
-        if !status.is_success() {
-            let text = res.text().await.unwrap_or_default();
-            return Err(format!("Failed to update Gist (Status {}): {}", status, text));
-        }
-    }
-
-    Ok(())
-}
-
-// GitHub Gist Pull (supports multi-part chunked payloads and manifest verification)
-pub async fn pull_github_gist(config: &mut Config) -> Result<Option<Vec<u8>>, String> {
-    if config.github_token.is_empty() {
-        return Err("GitHub Token not configured.".to_string());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-    // If Gist ID is empty, search for it
-    if config.github_gist_id.is_empty() {
-        let list_url = "https://api.github.com/gists";
-        let res = client.get(list_url)
-            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
-            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
-            .bearer_auth(&config.github_token)
-            .send()
-            .await
-            .map_err(|e| format!("Gist list error: {}", e))?;
-
-        if res.status().is_success() {
-            if let Ok(gists) = res.json::<Vec<Value>>().await {
-                for gist in gists {
-                    if gist["description"].as_str() == Some("Helium Sync Backup") {
-                        if let Some(id) = gist["id"].as_str() {
-                            config.github_gist_id = id.to_string();
-                            let _ = crate::config::save_config(config);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if config.github_gist_id.is_empty() {
-        return Ok(None);
-    }
-
-    let get_url = format!("https://api.github.com/gists/{}", config.github_gist_id);
-    let res = client.get(&get_url)
+    // 1. Get authenticated user login name
+    crate::watcher::add_log("Fetching GitHub username...");
+    let user_url = "https://api.github.com/user";
+    let res = client.get(user_url)
         .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
         .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
         .bearer_auth(&config.github_token)
         .send()
         .await
-        .map_err(|e| format!("Gist download error: {}", e))?;
-
+        .map_err(|e| format!("Failed to fetch user details: {}", e))?;
+    
     let status = res.status();
-    if status.as_u16() == 404 {
-        return Ok(None);
-    }
-
     if !status.is_success() {
         let text = res.text().await.unwrap_or_default();
-        return Err(format!("Failed to download Gist (Status {}): {}", status, text));
+        return Err(format!("Failed to authenticate with GitHub (Status {}): {}", status, text));
+    }
+    
+    let user_json: Value = res.json().await.map_err(|e| format!("Failed to parse user details JSON: {}", e))?;
+    let owner = user_json["login"].as_str()
+        .ok_or_else(|| "Failed to retrieve login name from GitHub".to_string())?;
+
+    let repo = "helium-sync-backups";
+
+    // 2. Check if repository exists. If not, create it as private.
+    crate::watcher::add_log(&format!("Checking if repository {}/{} exists...", owner, repo));
+    let repo_url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+    let res = client.get(&repo_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+        .bearer_auth(&config.github_token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to check repository existence: {}", e))?;
+
+    let repo_status = res.status();
+    if repo_status.as_u16() == 404 {
+        crate::watcher::add_log(&format!("Repository does not exist. Creating private repository {}/{}...", owner, repo));
+        let create_repo_url = "https://api.github.com/user/repos";
+        let create_body = serde_json::json!({
+            "name": repo,
+            "private": true,
+            "description": "Helium Sync Private Profile Backups",
+            "auto_init": true
+        });
+        let res = client.post(create_repo_url)
+            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+            .bearer_auth(&config.github_token)
+            .json(&create_body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to create repository: {}", e))?;
+
+        let status = res.status();
+        // 422 means repo already exists (race condition or stale cache), treat as success
+        if !status.is_success() && status.as_u16() != 422 {
+            let text = res.text().await.unwrap_or_default();
+            return Err(format!(
+                "Failed to create private repository (Status {}): {}. Please ensure your GitHub Personal Access Token (PAT) has the 'repo' scope enabled.",
+                status, text
+            ));
+        }
+        crate::watcher::add_log("Repository created successfully.");
+    } else if !repo_status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Failed to check repository (Status {}): {}", repo_status, text));
     }
 
-    let gist_json: Value = res.json().await.map_err(|e| format!("Failed to parse Gist JSON: {}", e))?;
-    let files = &gist_json["files"];
+    // 3. Get or create release tagged "latest"
+    crate::watcher::add_log("Fetching 'latest' release metadata...");
+    let release_url = format!("https://api.github.com/repos/{}/{}/releases/tags/latest", owner, repo);
+    let res = client.get(&release_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+        .bearer_auth(&config.github_token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to check release status: {}", e))?;
 
-    // Check if manifest exists
-    if let Some(manifest_file) = files["helium_sync_manifest.json"].as_object() {
-        if let Some(manifest_str) = manifest_file["content"].as_str() {
-            if let Ok(manifest) = serde_json::from_str::<Value>(manifest_str) {
-                let backup_version = manifest["version"].as_str().unwrap_or("0.1.0");
-                let timestamp = manifest["timestamp"].as_str().unwrap_or("Unknown");
-                crate::watcher::add_log(&format!("Found cloud backup (Version: {}, Created: {})", backup_version, timestamp));
-                
-                let current_version = env!("CARGO_PKG_VERSION");
-                if backup_version != current_version {
-                    crate::watcher::add_log(&format!("[WARN] Cloud backup version ({}) differs from local daemon version ({})", backup_version, current_version));
-                }
+    let release_json: Value = if res.status().is_success() {
+        res.json().await.map_err(|e| format!("Failed to parse release JSON: {}", e))?
+    } else {
+        crate::watcher::add_log("Release does not exist. Creating new release tagged 'latest'...");
+        let create_release_url = format!("https://api.github.com/repos/{}/{}/releases", owner, repo);
+        let create_body = serde_json::json!({
+            "tag_name": "latest",
+            "name": "Latest Profile Backup",
+            "draft": false,
+            "prerelease": false
+        });
+        let res = client.post(&create_release_url)
+            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+            .bearer_auth(&config.github_token)
+            .json(&create_body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to create release: {}", e))?;
 
-                let parts = manifest["parts"].as_u64().unwrap_or(1) as usize;
-                if parts == 1 {
-                    if let Some(single_content) = files["helium_sync_profile.bin"]["content"].as_str() {
-                        let decoded = BASE64_STANDARD.decode(single_content)
-                            .map_err(|e| format!("Base64 decoding error: {}", e))?;
-                        return Ok(Some(decoded));
+        let status = res.status();
+        if !status.is_success() {
+            let text = res.text().await.unwrap_or_default();
+            return Err(format!("Failed to create release (Status {}): {}", status, text));
+        }
+        res.json().await.map_err(|e| format!("Failed to parse created release JSON: {}", e))?
+    };
+
+    let release_id = release_json["id"].as_i64()
+        .ok_or_else(|| "Failed to get release ID from GitHub response".to_string())?;
+
+    // 4. Delete existing asset named "helium_sync_profile.bin" if it exists
+    if let Some(assets) = release_json["assets"].as_array() {
+        for asset in assets {
+            if asset["name"].as_str() == Some("helium_sync_profile.bin") {
+                if let Some(asset_id) = asset["id"].as_i64() {
+                    crate::watcher::add_log("Deleting old profile asset from GitHub release...");
+                    let delete_url = format!("https://api.github.com/repos/{}/{}/releases/assets/{}", owner, repo, asset_id);
+                    let res = client.delete(&delete_url)
+                        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+                        .bearer_auth(&config.github_token)
+                        .send()
+                        .await;
+                    if let Ok(resp) = res {
+                        if !resp.status().is_success() {
+                            crate::watcher::add_log(&format!("[WARN] Failed to delete old asset: {}", resp.status()));
+                        }
                     }
-                } else {
-                    let mut combined_b64 = String::new();
-                    for i in 0..parts {
-                        let part_name = format!("helium_sync_part_{:04}.bin", i);
-                        let part_content = files[&part_name]["content"].as_str()
-                            .ok_or_else(|| format!("Missing chunk file: {}", part_name))?;
-                        combined_b64.push_str(part_content);
-                    }
-                    let decoded = BASE64_STANDARD.decode(&combined_b64)
-                        .map_err(|e| format!("Base64 decoding error (multi-part): {}", e))?;
-                    return Ok(Some(decoded));
                 }
             }
         }
     }
 
-    // Backward compatibility fallback: if manifest doesn't exist, check for single profile bin
-    if let Some(single_content) = files["helium_sync_profile.bin"]["content"].as_str() {
-        crate::watcher::add_log("Found legacy cloud backup (No manifest, assuming v0.1.0/v0.2.0)");
-        let decoded = BASE64_STANDARD.decode(single_content)
-            .map_err(|e| format!("Base64 decoding error: {}", e))?;
-        return Ok(Some(decoded));
+    // 5. Upload the new asset to the release using raw binary PUT/POST
+    crate::watcher::add_log("Uploading raw profile package as release asset...");
+    let upload_url = format!(
+        "https://uploads.github.com/repos/{}/{}/releases/{}/assets?name=helium_sync_profile.bin",
+        owner, repo, release_id
+    );
+
+    let res = client.post(&upload_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .header(reqwest::header::CONTENT_LENGTH, file_data.len())
+        .bearer_auth(&config.github_token)
+        .body(file_data.to_owned())
+        .send()
+        .await
+        .map_err(|e| format!("Asset upload error: {}", e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Failed to upload asset (Status {}): {}", status, text));
     }
 
-    Err("No backup file found in Gist.".to_string())
+    Ok(())
+}
+
+// GitHub Releases Pull (downloads raw binary data directly)
+pub async fn pull_github_releases(config: &mut Config) -> Result<Option<Vec<u8>>, String> {
+    if config.github_token.is_empty() {
+        return Err("GitHub Token not configured.".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    // 1. Get authenticated user login name
+    let user_url = "https://api.github.com/user";
+    let res = client.get(user_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+        .bearer_auth(&config.github_token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch user details: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("GitHub authentication failed (Status {}): {}. Check your Personal Access Token.", status, text));
+    }
+    
+    let user_json: Value = res.json().await.map_err(|e| format!("Failed to parse user JSON: {}", e))?;
+    let owner = user_json["login"].as_str()
+        .ok_or_else(|| "Failed to retrieve login name".to_string())?;
+
+    let repo = "helium-sync-backups";
+
+    // 2. Fetch the latest release to get assets
+    let release_url = format!("https://api.github.com/repos/{}/{}/releases/tags/latest", owner, repo);
+    let res = client.get(&release_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+        .bearer_auth(&config.github_token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to check release: {}", e))?;
+
+    let status = res.status();
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Failed to fetch release (Status {}): {}", status, text));
+    }
+
+    let release_json: Value = res.json().await.map_err(|e| format!("Failed to parse release JSON: {}", e))?;
+    
+    // Find the helium_sync_profile.bin asset
+    let mut asset_url = None;
+    if let Some(assets) = release_json["assets"].as_array() {
+        for asset in assets {
+            if asset["name"].as_str() == Some("helium_sync_profile.bin") {
+                asset_url = asset["url"].as_str().map(|s| s.to_string());
+                break;
+            }
+        }
+    }
+
+    let download_url = match asset_url {
+        Some(url) => url,
+        None => return Ok(None),
+    };
+
+    // 3. Download the asset file
+    crate::watcher::add_log("Downloading profile backup asset from GitHub release...");
+    let res = client.get(&download_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::ACCEPT, "application/octet-stream")
+        .bearer_auth(&config.github_token)
+        .send()
+        .await
+        .map_err(|e| format!("Asset download error: {}", e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Failed to download asset data (Status {}): {}", status, text));
+    }
+
+    let data = res.bytes().await.map_err(|e| format!("Failed to read asset bytes: {}", e))?;
+    Ok(Some(data.to_vec()))
 }
 
 // Main Sync trigger (Push)
@@ -675,23 +697,32 @@ pub async fn trigger_push(config: &mut Config) -> Result<(), String> {
     let profile_dir = get_helium_profile_dir(config)
         .ok_or_else(|| "Helium profile directory not found. Please specify it manually in Settings.".to_string())?;
         
-    let zip_data = zip_profile(&profile_dir)?;
+    crate::watcher::add_log("Starting profile compression (Zipping)...");
+    let zip_data = zip_profile(&profile_dir, config)?;
+    crate::watcher::add_log(&format!("Profile compressed successfully. Zip package size: {:.2} KB", zip_data.len() as f64 / 1024.0));
     
     let payload = if config.encryption_active {
         if config.encryption_password.is_empty() {
             return Err("Encryption is enabled but no passphrase was provided.".to_string());
         }
-        encrypt_bytes(&zip_data, &config.encryption_password)?
+        crate::watcher::add_log("AES-256-GCM local encryption activated. Encrypting package...");
+        let encrypted = encrypt_bytes(&zip_data, &config.encryption_password)?;
+        crate::watcher::add_log(&format!("Package encrypted successfully. Encrypted size: {:.2} KB", encrypted.len() as f64 / 1024.0));
+        encrypted
     } else {
+        crate::watcher::add_log("Encryption disabled. Proceeding with raw zip package.");
         zip_data
     };
     
+    crate::watcher::add_log(&format!("Uploading backup to provider: {}...", config.provider));
     match config.provider.as_str() {
         "webdav" => {
             push_webdav(config, &payload).await?;
+            crate::watcher::add_log("WebDAV upload completed successfully.");
         }
-        "github_gist" => {
-            push_github_gist(config, &payload).await?;
+        "github_releases" => {
+            push_github_releases(config, &payload).await?;
+            crate::watcher::add_log("GitHub Releases upload completed successfully.");
         }
         _ => return Err("No cloud provider configured.".to_string()),
     }
@@ -709,35 +740,42 @@ pub async fn trigger_pull(config: &mut Config) -> Result<bool, String> {
     let profile_dir = get_helium_profile_dir(config)
         .ok_or_else(|| "Helium profile directory not found. Please specify it manually in Settings.".to_string())?;
         
+    crate::watcher::add_log(&format!("Downloading backup from provider: {}...", config.provider));
     let fetched = match config.provider.as_str() {
         "webdav" => pull_webdav(config).await?,
-        "github_gist" => pull_github_gist(config).await?,
+        "github_releases" => pull_github_releases(config).await?,
         _ => return Ok(false),
     };
     
     if let Some(payload) = fetched {
+        crate::watcher::add_log(&format!("Download completed successfully. Size: {:.2} KB", payload.len() as f64 / 1024.0));
+        
         let zip_data = if config.encryption_active {
             if config.encryption_password.is_empty() {
                 return Err("Encryption is enabled but no passphrase was provided.".to_string());
             }
+            crate::watcher::add_log("Decrypting local backup package using AES-256-GCM...");
             decrypt_bytes(&payload, &config.encryption_password)?
         } else {
             payload
         };
         
+        crate::watcher::add_log("Extracting profile files (Unzipping)...");
         // Ensure profile dir exists before unzipping
         fs::create_dir_all(&profile_dir)
             .map_err(|e| format!("Failed to create profile directory: {}", e))?;
             
         unzip_profile(&zip_data, &profile_dir)?;
+        crate::watcher::add_log("Extraction completed. Profile restored successfully!");
         
         config.last_sync_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        config.last_sync_size_bytes = zip_data.len() as u64; // Use raw size or encrypted size? Raw is fine.
+        config.last_sync_size_bytes = zip_data.len() as u64;
         let _ = crate::config::save_config(config);
         
         return Ok(true);
     }
     
+    crate::watcher::add_log("No backup file found in cloud provider.");
     Ok(false)
 }
 
@@ -789,7 +827,7 @@ mod tests {
         f3.write_all(b"this should not be included").unwrap();
         
         // Zip
-        let zipped_data = zip_profile(&temp_dir).unwrap();
+        let zipped_data = zip_profile(&temp_dir, &Config::default()).unwrap();
         assert!(!zipped_data.is_empty());
         
         // Unzip

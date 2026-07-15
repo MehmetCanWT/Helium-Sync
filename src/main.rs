@@ -29,7 +29,7 @@ async fn main() {
 
     // Define bind address
     let addr = SocketAddr::from(([127, 0, 0, 1], 8384));
-    add_log(&format!("Web UI server starting: http://{}", addr));
+    add_log(&format!("REST API daemon server starting: http://{}", addr));
 
     // Bind TcpListener
     let listener = match tokio::net::TcpListener::bind(addr).await {

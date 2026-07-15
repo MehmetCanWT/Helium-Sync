@@ -209,6 +209,18 @@ def api_post(endpoint: str, data: Optional[Dict[str, Any]] = None) -> Tuple[bool
     except Exception as e:
         return False, str(e)
 
+class ApiWorker(QtCore.QThread):
+    finished = QtCore.pyqtSignal(bool, str)
+
+    def __init__(self, endpoint: str, data: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.endpoint = endpoint
+        self.data = data
+
+    def run(self):
+        success, msg = api_post(self.endpoint, self.data)
+        self.finished.emit(success, msg)
+
 class HeliumSyncGUI(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -264,7 +276,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         title_layout = QtWidgets.QVBoxLayout()
         title_label = QtWidgets.QLabel("Helium Sync")
         title_label.setObjectName("titleLabel")
-        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.6.0")
+        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer")
         self.subtitle_label.setObjectName("subtitleLabel")
         title_layout.addWidget(title_label)
         title_layout.addWidget(self.subtitle_label)
@@ -292,12 +304,14 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         self.card_provider = self.create_status_card("Cloud Provider", "Not configured")
         self.card_time = self.create_status_card("Last Synchronized", "Never synchronized")
         self.card_size = self.create_status_card("Last Backup Size", "0 Bytes")
+        self.card_est_size = self.create_status_card("Estimated Backup Size", "0 Bytes")
         self.card_encryption = self.create_status_card("Local Encryption", "Disabled")
 
         cards_layout.addWidget(self.card_provider, 0, 0)
         cards_layout.addWidget(self.card_time, 0, 1)
         cards_layout.addWidget(self.card_size, 1, 0)
-        cards_layout.addWidget(self.card_encryption, 1, 1)
+        cards_layout.addWidget(self.card_est_size, 1, 1)
+        cards_layout.addWidget(self.card_encryption, 2, 0, 1, 2)
         status_layout.addWidget(cards_widget)
 
         # Warnings / Status Banner
@@ -358,9 +372,16 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         prov_layout = QtWidgets.QVBoxLayout(prov_group)
         prov_layout.setContentsMargins(15, 15, 15, 15)
         self.combo_provider = QtWidgets.QComboBox()
-        self.combo_provider.addItems(["None", "GitHub Gist", "WebDAV"])
+        self.combo_provider.addItems(["None", "GitHub Releases", "WebDAV"])
         self.combo_provider.currentIndexChanged.connect(self.toggle_provider_fields)
         prov_layout.addWidget(self.combo_provider)
+        
+        self.provider_warning = QtWidgets.QLabel()
+        self.provider_warning.setWordWrap(True)
+        self.provider_warning.setStyleSheet("color: #F87171; font-weight: 600; margin-top: 5px;")
+        self.provider_warning.hide()
+        prov_layout.addWidget(self.provider_warning)
+        
         settings_layout.addWidget(prov_group)
 
         # Profile Group
@@ -375,18 +396,15 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         prof_layout.addWidget(btn_browse)
         settings_layout.addWidget(prof_group)
 
-        # GitHub Gist Settings
-        self.gist_group = QtWidgets.QGroupBox("GitHub Gist Credentials")
-        gist_layout = QtWidgets.QFormLayout(self.gist_group)
-        gist_layout.setContentsMargins(15, 15, 15, 15)
-        gist_layout.setVerticalSpacing(10)
+        # GitHub Settings
+        self.github_group = QtWidgets.QGroupBox("GitHub Credentials")
+        github_layout = QtWidgets.QFormLayout(self.github_group)
+        github_layout.setContentsMargins(15, 15, 15, 15)
+        github_layout.setVerticalSpacing(10)
         self.input_token = QtWidgets.QLineEdit()
         self.input_token.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.input_gist_id = QtWidgets.QLineEdit()
-        self.input_gist_id.setPlaceholderText("Will auto-create private Gist if empty")
-        gist_layout.addRow("Personal Access Token (with gist scope):", self.input_token)
-        gist_layout.addRow("Existing Gist ID (Optional):", self.input_gist_id)
-        settings_layout.addWidget(self.gist_group)
+        github_layout.addRow("Personal Access Token (with repo scope):", self.input_token)
+        settings_layout.addWidget(self.github_group)
 
         # WebDAV Settings
         self.webdav_group = QtWidgets.QGroupBox("WebDAV Storage Credentials")
@@ -406,6 +424,29 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         settings_layout.addWidget(self.webdav_group)
 
         # Encryption Settings
+        # Sync Content Group
+        content_group = QtWidgets.QGroupBox("Sync Content Settings")
+        content_layout = QtWidgets.QVBoxLayout(content_group)
+        content_layout.setContentsMargins(15, 15, 15, 15)
+        content_layout.setSpacing(10)
+        
+        self.check_sync_bookmarks = QtWidgets.QCheckBox("Sync Bookmarks, History, Logins & Cookies (Recommended)")
+        self.check_sync_bookmarks.setChecked(True)
+        self.check_sync_extensions = QtWidgets.QCheckBox("Sync Installed Extension Files")
+        self.check_sync_extensions.setChecked(True)
+        self.check_sync_ext_db = QtWidgets.QCheckBox("Sync Extension Databases & Settings")
+        self.check_sync_ext_db.setChecked(True)
+        
+        # Recalculate estimated size dynamically when checkboxes change
+        self.check_sync_bookmarks.stateChanged.connect(lambda: self.save_settings(silent=True))
+        self.check_sync_extensions.stateChanged.connect(lambda: self.save_settings(silent=True))
+        self.check_sync_ext_db.stateChanged.connect(lambda: self.save_settings(silent=True))
+        
+        content_layout.addWidget(self.check_sync_bookmarks)
+        content_layout.addWidget(self.check_sync_extensions)
+        content_layout.addWidget(self.check_sync_ext_db)
+        settings_layout.addWidget(content_group)
+
         enc_group = QtWidgets.QGroupBox("Backup Security (AES-256-GCM)")
         enc_layout = QtWidgets.QVBoxLayout(enc_group)
         enc_layout.setContentsMargins(15, 15, 15, 15)
@@ -537,14 +578,14 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             return
 
         # Update Header version
-        app_ver = status_data.get("app_version", "0.6.0")
+        app_ver = status_data.get("app_version", "0.8.0")
         self.subtitle_label.setText(f"Cloud Synchronizer & DRM Fixer • v{app_ver}")
 
         # Update Cards
         provider = status_data.get("provider", "none")
         provider_name = "None"
-        if provider == "github_gist":
-            provider_name = "GitHub Gist"
+        if provider == "github_releases":
+            provider_name = "GitHub Releases"
         elif provider == "webdav":
             provider_name = "WebDAV"
         self.card_provider.val_lbl.setText(provider_name)
@@ -555,11 +596,16 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         last_bytes = status_data.get("last_sync_size_bytes", 0)
         self.card_size.val_lbl.setText(self.format_bytes(last_bytes))
 
+        estimated_size = status_data.get("estimated_size_bytes", 0)
+        self.card_est_size.val_lbl.setText(self.format_bytes(estimated_size))
+
         enc = status_data.get("encryption_active", False)
         self.card_encryption.val_lbl.setText("Enabled (AES-256)" if enc else "Disabled")
         self.card_encryption.val_lbl.setStyleSheet(
             "color: #34D399; font-weight: 700;" if enc else "color: #F59E0B; font-weight: 700;"
         )
+
+        self.provider_warning.hide()
 
         # Check Browser Running Warning
         browser_run = status_data.get("browser_running", False)
@@ -586,7 +632,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             if num_bytes < 1024.0:
                 return f"{num_bytes:.2f} {unit}"
             num_bytes /= 1024.0
-        return f"{num_bytes:.2f} GB"
+        return f"{num_bytes:.2f} TB"
 
     def refresh_logs(self):
         log_data = api_get("logs")
@@ -603,14 +649,14 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
 
     def toggle_provider_fields(self, index):
         provider = self.combo_provider.currentText()
-        if provider == "GitHub Gist":
-            self.gist_group.show()
+        if provider == "GitHub Releases":
+            self.github_group.show()
             self.webdav_group.hide()
         elif provider == "WebDAV":
-            self.gist_group.hide()
+            self.github_group.hide()
             self.webdav_group.show()
         else:
-            self.gist_group.hide()
+            self.github_group.hide()
             self.webdav_group.hide()
 
     def toggle_encryption_fields(self, state):
@@ -627,8 +673,8 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             return
 
         provider = config.get("provider", "none")
-        if provider == "github_gist":
-            self.combo_provider.setCurrentText("GitHub Gist")
+        if provider == "github_releases":
+            self.combo_provider.setCurrentText("GitHub Releases")
         elif provider == "webdav":
             self.combo_provider.setCurrentText("WebDAV")
         else:
@@ -636,22 +682,25 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
 
         self.input_profile.setText(config.get("profile_path", ""))
         self.input_token.setText(config.get("github_token", ""))
-        self.input_gist_id.setText(config.get("github_gist_id", ""))
         self.input_wd_url.setText(config.get("webdav_url", ""))
         self.input_wd_user.setText(config.get("webdav_username", ""))
         self.input_wd_pass.setText(config.get("webdav_password", ""))
         self.input_wd_folder.setText(config.get("webdav_folder", "helium-sync"))
+
+        self.check_sync_bookmarks.setChecked(config.get("sync_bookmarks_history", True))
+        self.check_sync_extensions.setChecked(config.get("sync_extensions", True))
+        self.check_sync_ext_db.setChecked(config.get("sync_extension_databases", True))
 
         enc_active = config.get("encryption_active", False)
         self.check_enc.setChecked(enc_active)
         self.input_enc_pass.setText(config.get("encryption_password", ""))
         self.enc_pass_widget.setVisible(enc_active)
 
-    def save_settings(self):
+    def save_settings(self, silent=False):
         provider_text = self.combo_provider.currentText()
         provider = "none"
-        if provider_text == "GitHub Gist":
-            provider = "github_gist"
+        if provider_text == "GitHub Releases":
+            provider = "github_releases"
         elif provider_text == "WebDAV":
             provider = "webdav"
 
@@ -659,29 +708,58 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             "provider": provider,
             "profile_path": self.input_profile.text().strip(),
             "github_token": self.input_token.text().strip(),
-            "github_gist_id": self.input_gist_id.text().strip(),
             "webdav_url": self.input_wd_url.text().strip(),
             "webdav_username": self.input_wd_user.text().strip(),
             "webdav_password": self.input_wd_pass.text().strip(),
             "webdav_folder": self.input_wd_folder.text().strip(),
             "encryption_active": self.check_enc.isChecked(),
             "encryption_password": self.input_enc_pass.text().strip(),
+            "sync_bookmarks_history": self.check_sync_bookmarks.isChecked(),
+            "sync_extensions": self.check_sync_extensions.isChecked(),
+            "sync_extension_databases": self.check_sync_ext_db.isChecked(),
         }
 
-        success, msg = api_post("settings", payload)
+        # Run settings save on background thread
+        self.settings_worker = ApiWorker("settings", payload)
+        self.settings_worker.finished.connect(lambda success, msg: self.on_settings_finished(success, msg, silent))
+        self.settings_worker.start()
+
+    def on_settings_finished(self, success, msg, silent=False):
         if success:
-            QtWidgets.QMessageBox.information(self, "Success", "Configuration settings saved successfully!")
+            if not silent:
+                QtWidgets.QMessageBox.information(self, "Success", "Configuration settings saved successfully!")
             self.refresh_status()
         else:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save configuration settings:\n{msg}")
+            if not silent:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save configuration settings:\n{msg}")
 
     def trigger_sync(self):
-        success, msg = api_post("sync")
+        # Disable buttons during sync to prevent multiple triggers
+        self.btn_sync.setEnabled(False)
+        self.btn_restore.setEnabled(False)
+        
+        self.sync_worker = ApiWorker("sync")
+        self.sync_worker.finished.connect(self.on_sync_finished)
+        self.sync_worker.start()
+
+    def on_sync_finished(self, success, msg):
+        self.refresh_status()
+        self.refresh_logs()
         if success:
-            QtWidgets.QMessageBox.information(self, "Success", "Manual synchronization (Push) triggered successfully!")
-            self.refresh_status()
-            self.refresh_logs()
+            self.tray_icon.showMessage(
+                "Helium Sync",
+                "Manual synchronization (Push) completed successfully!",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+            QtWidgets.QMessageBox.information(self, "Success", "Manual synchronization (Push) completed successfully!")
         else:
+            self.tray_icon.showMessage(
+                "Helium Sync Error",
+                f"Failed to trigger manual synchronization:\n{msg}",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Warning,
+                3000
+            )
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to trigger manual synchronization:\n{msg}")
 
     def trigger_restore(self):
@@ -692,20 +770,51 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
         )
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            success, msg = api_post("restore")
-            if success:
-                QtWidgets.QMessageBox.information(self, "Success", "Manual restore (Pull) completed successfully!")
-                self.refresh_status()
-                self.refresh_logs()
-            else:
-                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to restore cloud backup:\n{msg}")
+            self.btn_sync.setEnabled(False)
+            self.btn_restore.setEnabled(False)
+            
+            self.restore_worker = ApiWorker("restore")
+            self.restore_worker.finished.connect(self.on_restore_finished)
+            self.restore_worker.start()
+
+    def on_restore_finished(self, success, msg):
+        self.refresh_status()
+        self.refresh_logs()
+        if success:
+            self.tray_icon.showMessage(
+                "Helium Sync",
+                "Manual restore (Pull) completed successfully! Profile loaded.",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+            QtWidgets.QMessageBox.information(self, "Success", "Manual restore (Pull) completed successfully!")
+        else:
+            self.tray_icon.showMessage(
+                "Helium Sync Error",
+                f"Failed to restore cloud backup:\n{msg}",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Warning,
+                3000
+            )
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to restore cloud backup:\n{msg}")
 
     def trigger_fix_drm(self):
-        success, msg = api_post("fix-drm")
+        self.btn_fix_drm.setEnabled(False)
+        self.drm_worker = ApiWorker("fix-drm")
+        self.drm_worker.finished.connect(self.on_fix_drm_finished)
+        self.drm_worker.start()
+
+    def on_fix_drm_finished(self, success, msg):
+        self.btn_fix_drm.setEnabled(True)
+        self.refresh_status()
+        self.refresh_logs()
         if success:
+            self.tray_icon.showMessage(
+                "Helium Sync",
+                "Widevine DRM fix applied successfully!",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
             QtWidgets.QMessageBox.information(self, "Success", "Widevine DRM fix applied successfully!")
-            self.refresh_status()
-            self.refresh_logs()
         else:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to apply Widevine DRM fix:\n{msg}")
 
@@ -717,13 +826,24 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
         )
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            success, msg = api_post("stop-browser")
-            if success:
-                QtWidgets.QMessageBox.information(self, "Success", "Helium Browser process terminated successfully!")
-                self.refresh_status()
-                self.refresh_logs()
-            else:
-                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to terminate Helium Browser process:\n{msg}")
+            self.btn_stop.setEnabled(False)
+            self.stop_worker = ApiWorker("stop-browser")
+            self.stop_worker.finished.connect(self.on_stop_browser_finished)
+            self.stop_worker.start()
+
+    def on_stop_browser_finished(self, success, msg):
+        self.refresh_status()
+        self.refresh_logs()
+        if success:
+            self.tray_icon.showMessage(
+                "Helium Sync",
+                "Helium Browser process terminated successfully!",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+            QtWidgets.QMessageBox.information(self, "Success", "Helium Browser process terminated successfully!")
+        else:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to terminate Helium Browser process:\n{msg}")
 
 def main():
     if not is_daemon_running():

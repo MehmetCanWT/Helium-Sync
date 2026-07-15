@@ -4,9 +4,13 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use directories::ProjectDirs;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
-    pub provider: String,                  // "webdav", "github_gist", "none"
+    pub provider: String,                  // "webdav", "github_releases", "none"
     pub webdav_url: String,
     pub webdav_username: String,
     pub webdav_password: String,
@@ -15,9 +19,15 @@ pub struct Config {
     pub encryption_password: String,
     pub profile_path: String,              // Manual override for Helium profile
     pub github_token: String,
-    pub github_gist_id: String,
     pub last_sync_time: String,
     pub last_sync_size_bytes: u64,
+
+    #[serde(default = "default_true")]
+    pub sync_bookmarks_history: bool,
+    #[serde(default = "default_true")]
+    pub sync_extensions: bool,
+    #[serde(default = "default_true")]
+    pub sync_extension_databases: bool,
 }
 
 impl Default for Config {
@@ -32,9 +42,11 @@ impl Default for Config {
             encryption_password: "".to_string(),
             profile_path: "".to_string(),
             github_token: "".to_string(),
-            github_gist_id: "".to_string(),
             last_sync_time: "Never synchronized".to_string(),
             last_sync_size_bytes: 0,
+            sync_bookmarks_history: true,
+            sync_extensions: true,
+            sync_extension_databases: true,
         }
     }
 }
