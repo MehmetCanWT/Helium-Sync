@@ -74,8 +74,8 @@ This automatically installs the executable and registers the user systemd servic
 #### Option 2: Build from Source
 ```bash
 # Clone the repository
-git clone https://github.com/kullaniciadi/helium-sync-daemon.git
-cd helium-sync-daemon
+git clone https://github.com/MehmetCanWT/Helium-Sync.git
+cd Helium-Sync
 
 # Build the embedded web frontend
 cd frontend && npm install && npm run build && cd ..
@@ -85,14 +85,23 @@ cargo build --release
 cp target/release/helium-sync-daemon ~/.local/bin/
 ```
 
-#### Autostart with systemd (User Space)
+#### Autostart & Managing with systemd (User Space)
 To run the sync daemon automatically in the background when your user logs in:
 ```bash
 # Enable and start the user service
 systemctl --user enable --now helium-sync
 
-# View logs to verify it is working
+# Check if the service is running successfully
+systemctl --user status helium-sync
+
+# View live logs to verify it is working
 journalctl --user -u helium-sync -f
+
+# Restart the service
+systemctl --user restart helium-sync
+
+# Stop the service
+systemctl --user stop helium-sync
 ```
 
 ---
