@@ -99,6 +99,8 @@ fn is_whitelisted(rel_path: &str) -> bool {
             "transportsecurity",
             "affiliation database",
             "affiliation database-journal",
+            "extension cookies",
+            "extension cookies-journal",
         ];
 
         // Direct file match
@@ -151,6 +153,13 @@ fn is_whitelisted(rel_path: &str) -> bool {
         // Allow Managed Extension Settings/ directory and its contents
         if file_part == "managed extension settings" || file_part.starts_with("managed extension settings/") {
             return true;
+        }
+        // Allow IndexedDB/ chrome-extension directories and files
+        if file_part.starts_with("indexeddb/") {
+            let inner = &file_part["indexeddb/".len()..];
+            if inner.starts_with("chrome-extension_") {
+                return true;
+            }
         }
     }
 

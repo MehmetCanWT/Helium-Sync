@@ -7,8 +7,9 @@ import json
 import time
 import urllib.request
 import urllib.parse
+import urllib.error
 import subprocess
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -127,6 +128,12 @@ QPushButton#fixDrmBtn {
 QPushButton#fixDrmBtn:hover {
     background-color: #F59E0B;
 }
+QPushButton#stopBrowserBtn {
+    background-color: #DC2626;
+}
+QPushButton#stopBrowserBtn:hover {
+    background-color: #EF4444;
+}
 QPlainTextEdit {
     background-color: #020617;
     border: 1px solid #1E293B;
@@ -183,7 +190,7 @@ def api_get(endpoint: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-def api_post(endpoint: str, data: Optional[Dict[str, Any]] = None) -> bool:
+def api_post(endpoint: str, data: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     try:
         req_data = json.dumps(data).encode("utf-8") if data else b""
         req = urllib.request.Request(
@@ -191,11 +198,16 @@ def api_post(endpoint: str, data: Optional[Dict[str, Any]] = None) -> bool:
             data=req_data,
             headers={"Content-Type": "application/json"} if data else {}
         )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return response.getcode() == 200
+        with urllib.request.urlopen(req, timeout=120) as response:
+            return response.getcode() == 200, "Success"
+    except urllib.error.HTTPError as e:
+        try:
+            err_msg = e.read().decode("utf-8")
+        except Exception:
+            err_msg = str(e)
+        return False, err_msg
     except Exception as e:
-        print(f"API POST Error ({endpoint}):", e)
-        return False
+        return False, str(e)
 
 class HeliumSyncGUI(QtWidgets.QMainWindow):
     def __init__(self):
@@ -252,7 +264,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         title_layout = QtWidgets.QVBoxLayout()
         title_label = QtWidgets.QLabel("Helium Sync")
         title_label.setObjectName("titleLabel")
-        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.5.0")
+        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.6.0")
         self.subtitle_label.setObjectName("subtitleLabel")
         title_layout.addWidget(title_label)
         title_layout.addWidget(self.subtitle_label)
@@ -316,9 +328,14 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         self.btn_fix_drm.setObjectName("fixDrmBtn")
         self.btn_fix_drm.clicked.connect(self.trigger_fix_drm)
 
+        self.btn_stop = QtWidgets.QPushButton("Stop Helium Browser")
+        self.btn_stop.setObjectName("stopBrowserBtn")
+        self.btn_stop.clicked.connect(self.trigger_stop_browser)
+
         actions_layout.addWidget(self.btn_sync)
         actions_layout.addWidget(self.btn_restore)
         actions_layout.addWidget(self.btn_fix_drm)
+        actions_layout.addWidget(self.btn_stop)
         status_layout.addWidget(actions_group)
         status_layout.addStretch()
 
@@ -520,7 +537,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             return
 
         # Update Header version
-        app_ver = status_data.get("app_version", "0.5.0")
+        app_ver = status_data.get("app_version", "0.6.0")
         self.subtitle_label.setText(f"Cloud Synchronizer & DRM Fixer • v{app_ver}")
 
         # Update Cards
@@ -555,10 +572,12 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             self.warn_banner.show()
             self.btn_sync.setEnabled(False)
             self.btn_restore.setEnabled(False)
+            self.btn_stop.setEnabled(True)
         else:
             self.warn_banner.hide()
             self.btn_sync.setEnabled(provider != "none")
             self.btn_restore.setEnabled(provider != "none")
+            self.btn_stop.setEnabled(False)
 
     def format_bytes(self, num_bytes):
         if num_bytes == 0:
@@ -649,19 +668,21 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             "encryption_password": self.input_enc_pass.text().strip(),
         }
 
-        if api_post("settings", payload):
+        success, msg = api_post("settings", payload)
+        if success:
             QtWidgets.QMessageBox.information(self, "Success", "Configuration settings saved successfully!")
             self.refresh_status()
         else:
-            QtWidgets.QMessageBox.critical(self, "Error", "Failed to save configuration settings.")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save configuration settings:\n{msg}")
 
     def trigger_sync(self):
-        if api_post("sync"):
+        success, msg = api_post("sync")
+        if success:
             QtWidgets.QMessageBox.information(self, "Success", "Manual synchronization (Push) triggered successfully!")
             self.refresh_status()
             self.refresh_logs()
         else:
-            QtWidgets.QMessageBox.critical(self, "Error", "Failed to trigger manual synchronization.")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to trigger manual synchronization:\n{msg}")
 
     def trigger_restore(self):
         reply = QtWidgets.QMessageBox.question(
@@ -671,20 +692,38 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
         )
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            if api_post("restore"):
+            success, msg = api_post("restore")
+            if success:
                 QtWidgets.QMessageBox.information(self, "Success", "Manual restore (Pull) completed successfully!")
                 self.refresh_status()
                 self.refresh_logs()
             else:
-                QtWidgets.QMessageBox.critical(self, "Error", "Failed to restore cloud backup.")
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to restore cloud backup:\n{msg}")
 
     def trigger_fix_drm(self):
-        if api_post("fix-drm"):
+        success, msg = api_post("fix-drm")
+        if success:
             QtWidgets.QMessageBox.information(self, "Success", "Widevine DRM fix applied successfully!")
             self.refresh_status()
             self.refresh_logs()
         else:
-            QtWidgets.QMessageBox.critical(self, "Error", "Failed to apply Widevine DRM fix.")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to apply Widevine DRM fix:\n{msg}")
+
+    def trigger_stop_browser(self):
+        reply = QtWidgets.QMessageBox.question(
+            self, "Stop Helium Browser",
+            "Are you sure you want to force close Helium Browser?\n"
+            "Any unsaved work in your browser will be lost!",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            success, msg = api_post("stop-browser")
+            if success:
+                QtWidgets.QMessageBox.information(self, "Success", "Helium Browser process terminated successfully!")
+                self.refresh_status()
+                self.refresh_logs()
+            else:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to terminate Helium Browser process:\n{msg}")
 
 def main():
     if not is_daemon_running():
