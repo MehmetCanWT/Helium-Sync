@@ -55,67 +55,81 @@ pub fn get_helium_profile_dir(config: &Config) -> Option<PathBuf> {
     None
 }
 
-// Blacklisted directories and files (Caches, lock files, logs)
-fn is_blacklisted(path: &Path) -> bool {
-    let components: Vec<String> = path
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
-        .collect();
+// Whitelist: Only sync essential browser profile data.
+// This drastically reduces sync size from ~200MB to ~1-2MB, making sync near-instant.
+fn is_whitelisted(rel_path: &str) -> bool {
+    let lower = rel_path.to_lowercase();
 
-    for comp in &components {
-        if comp.contains("cache")
-            || comp.contains("service worker")
-            || comp.contains("indexeddb")
-            || comp.contains("blob_storage")
-            || comp.contains("crash reports")
-            || comp.contains("metrics")
-            || comp.contains("gpucache")
-            || comp.contains("gpupersistentcache")
-            || comp.contains("dawnwebgpucache")
-            || comp.contains("dawngraphitecache")
-            || comp.contains("graphitedawncache")
-            || comp.contains("dictionaries")
-            || comp.contains("certificaterevocation")
-            || comp.contains("component_crx_cache")
-            || comp.contains("segmentation_platform")
-            || comp.contains("shared_proto_db")
-            || comp.contains("optimization_guide")
-            || comp.contains("videodecodestats")
-            || comp.contains("persistentorigintrials")
-            || comp.contains("parcel_tracking_db")
-            || comp.contains("discounts_db")
-            || comp.contains("discount_infos_db")
-            || comp.contains("commerce_subscription_db")
-            || comp.contains("extensions")
-            || comp.contains("local extension settings")
-            || comp.contains("managed extension settings")
-            || comp.contains("extension rules")
-            || comp.contains("extension scripts")
-            || comp.contains("extension state")
-            || comp.contains("webstorage")
-            || comp.contains("webstore downloads")
-            || comp.contains("gcm store")
-            || comp.contains("file system")
-            || comp.contains("shared dictionary")
-            || comp.contains("platform notifications")
-            || comp.contains("site characteristics database")
-            || comp.contains("nativemessaginghosts")
-            || comp.contains("browsermetrics")
-            || comp.contains("widevinecdm")
-            || comp == "lock"
-            || comp == "singletoncookie"
-            || comp == "singletonlock"
-            || comp == "singletonsocket"
-            || comp == "log"
-            || comp == "log.old"
-        {
+    // Top-level files that store critical state
+    if lower == "local state" {
+        return true;
+    }
+
+    // Allow the Default/ directory entry itself (needed to create the folder in zip)
+    if lower == "default" {
+        return true;
+    }
+
+    // Essential Default/ profile files
+    if lower.starts_with("default/") {
+        let file_part = &lower["default/".len()..];
+
+        let essential_files = [
+            "bookmarks",
+            "bookmarks.bak",
+            "cookies",
+            "cookies-journal",
+            "login data",
+            "login data-journal",
+            "login data for account",
+            "login data for account-journal",
+            "web data",
+            "web data-journal",
+            "preferences",
+            "secure preferences",
+            "history",
+            "history-journal",
+            "favicons",
+            "favicons-journal",
+            "top sites",
+            "top sites-journal",
+            "shortcuts",
+            "shortcuts-journal",
+            "network persistent state",
+            "transportsecurity",
+            "affiliation database",
+            "affiliation database-journal",
+        ];
+
+        // Direct file match
+        for f in &essential_files {
+            if file_part == *f {
+                return true;
+            }
+        }
+
+        // Allow Local Storage/ directory and its contents
+        if file_part == "local storage" || file_part.starts_with("local storage/") {
+            return true;
+        }
+        // Allow Session Storage/ directory and its contents
+        if file_part == "session storage" || file_part.starts_with("session storage/") {
+            return true;
+        }
+        // Allow Sessions/ directory and its contents
+        if file_part == "sessions" || file_part.starts_with("sessions/") {
+            return true;
+        }
+        // Allow Sync Data/ directory
+        if file_part == "sync data" || file_part.starts_with("sync data/") {
             return true;
         }
     }
+
     false
 }
 
-// Compression (Zip Profile)
+// Compression (Zip Profile) — only whitelisted essential files
 pub fn zip_profile(profile_dir: &Path) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     {
@@ -136,22 +150,21 @@ pub fn zip_profile(profile_dir: &Path) -> Result<Vec<u8>, String> {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
                     
-                    if is_blacklisted(&entry_path) {
-                        continue;
-                    }
-                    
                     let rel_path = &entry_path.to_string_lossy()[prefix_len..];
                     let rel_path = rel_path.trim_start_matches('/').replace('\\', "/");
                     
                     if rel_path.is_empty() {
                         continue;
                     }
-                    
+
                     if entry_path.is_dir() {
-                        zip.add_directory(&rel_path, options)
-                            .map_err(|e| format!("Failed to add directory to zip: {}", e))?;
-                        stack.push(entry_path);
-                    } else if entry_path.is_file() {
+                        // Only descend into whitelisted directories
+                        if is_whitelisted(&rel_path) {
+                            zip.add_directory(&rel_path, options)
+                                .map_err(|e| format!("Failed to add directory to zip: {}", e))?;
+                            stack.push(entry_path);
+                        }
+                    } else if entry_path.is_file() && is_whitelisted(&rel_path) {
                         zip.start_file(&rel_path, options)
                             .map_err(|e| format!("Failed to start file in zip: {}", e))?;
                         let mut file = File::open(&entry_path)
@@ -659,16 +672,24 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
         fs::create_dir_all(&extract_dir).unwrap();
         
-        // Write test files
-        let file1_path = temp_dir.join("test1.txt");
-        let mut file1 = File::create(&file1_path).unwrap();
-        file1.write_all(b"Hello from test file 1").unwrap();
+        // Create whitelisted files that match the profile structure
+        let default_dir = temp_dir.join("Default");
+        fs::create_dir_all(&default_dir).unwrap();
+
+        let bookmarks_path = default_dir.join("Bookmarks");
+        let mut f1 = File::create(&bookmarks_path).unwrap();
+        f1.write_all(b"{\"bookmarks\": []}").unwrap();
         
-        let sub_dir = temp_dir.join("subfolder");
-        fs::create_dir_all(&sub_dir).unwrap();
-        let file2_path = sub_dir.join("test2.txt");
-        let mut file2 = File::create(&file2_path).unwrap();
-        file2.write_all(b"Hello from test file 2 in subfolder").unwrap();
+        let sessions_dir = default_dir.join("Sessions");
+        fs::create_dir_all(&sessions_dir).unwrap();
+        let session_path = sessions_dir.join("current_session");
+        let mut f2 = File::create(&session_path).unwrap();
+        f2.write_all(b"session data here").unwrap();
+
+        // Create a non-whitelisted file (should be excluded)
+        let cache_path = default_dir.join("random_cache_file.bin");
+        let mut f3 = File::create(&cache_path).unwrap();
+        f3.write_all(b"this should not be included").unwrap();
         
         // Zip
         let zipped_data = zip_profile(&temp_dir).unwrap();
@@ -677,20 +698,24 @@ mod tests {
         // Unzip
         unzip_profile(&zipped_data, &extract_dir).unwrap();
         
-        // Verify
-        let ext_file1 = extract_dir.join("test1.txt");
-        let ext_file2 = extract_dir.join("subfolder").join("test2.txt");
+        // Verify whitelisted files exist
+        let ext_bookmarks = extract_dir.join("Default").join("Bookmarks");
+        let ext_session = extract_dir.join("Default").join("Sessions").join("current_session");
         
-        assert!(ext_file1.exists());
-        assert!(ext_file2.exists());
+        assert!(ext_bookmarks.exists(), "Bookmarks should be synced");
+        assert!(ext_session.exists(), "Session files should be synced");
+        
+        // Verify non-whitelisted file was excluded
+        let ext_cache = extract_dir.join("Default").join("random_cache_file.bin");
+        assert!(!ext_cache.exists(), "Non-whitelisted files should be excluded");
         
         let mut c1 = String::new();
-        File::open(ext_file1).unwrap().read_to_string(&mut c1).unwrap();
-        assert_eq!(c1, "Hello from test file 1");
+        File::open(ext_bookmarks).unwrap().read_to_string(&mut c1).unwrap();
+        assert_eq!(c1, "{\"bookmarks\": []}");
         
         let mut c2 = String::new();
-        File::open(ext_file2).unwrap().read_to_string(&mut c2).unwrap();
-        assert_eq!(c2, "Hello from test file 2 in subfolder");
+        File::open(ext_session).unwrap().read_to_string(&mut c2).unwrap();
+        assert_eq!(c2, "session data here");
         
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);

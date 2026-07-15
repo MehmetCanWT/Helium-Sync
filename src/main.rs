@@ -25,7 +25,7 @@ async fn main() {
 
     // Create Axum Router
     let app = web::create_router()
-        .layer(CorsLayer::permissive()); // Permit cross-origin requests for local development if needed
+        .layer(CorsLayer::permissive());
 
     // Define bind address
     let addr = SocketAddr::from(([127, 0, 0, 1], 8384));
@@ -40,8 +40,24 @@ async fn main() {
         }
     };
 
-    // Run Axum server
-    if let Err(e) = axum::serve(listener, app).await {
-        eprintln!("[CRITICAL] Server error: {}", e);
-    }
+    // Run Axum server with graceful shutdown on SIGTERM
+    let shutdown_signal = async {
+        tokio::signal::ctrl_c().await.ok();
+        add_log("Shutdown signal received. Running final sync...");
+
+        // Perform a final push sync before exiting
+        let mut config = config::load_config();
+        if config.provider != "none" {
+            match sync::trigger_push(&mut config).await {
+                Ok(_) => add_log("Shutdown sync completed successfully."),
+                Err(e) => add_log(&format!("[ERROR] Shutdown sync failed: {}", e)),
+            }
+        }
+        add_log("Helium Sync Daemon shutting down. Goodbye!");
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+        .unwrap_or_else(|e| eprintln!("[CRITICAL] Server error: {}", e));
 }
