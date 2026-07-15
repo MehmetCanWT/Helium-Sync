@@ -107,3 +107,14 @@ pub async fn start_watcher() {
         }
     }
 }
+
+pub fn stop_helium() {
+    let mut sys = System::new();
+    sys.refresh_processes();
+    for process in sys.processes().values() {
+        let name = process.name().to_lowercase();
+        if name == "helium" || name == "helium-browser" {
+            process.kill();
+        }
+    }
+}

@@ -127,6 +127,12 @@ QPushButton#fixDrmBtn {
 QPushButton#fixDrmBtn:hover {
     background-color: #F59E0B;
 }
+QPushButton#stopBrowserBtn {
+    background-color: #DC2626;
+}
+QPushButton#stopBrowserBtn:hover {
+    background-color: #EF4444;
+}
 QPlainTextEdit {
     background-color: #020617;
     border: 1px solid #1E293B;
@@ -252,7 +258,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         title_layout = QtWidgets.QVBoxLayout()
         title_label = QtWidgets.QLabel("Helium Sync")
         title_label.setObjectName("titleLabel")
-        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.5.0")
+        self.subtitle_label = QtWidgets.QLabel("Cloud Synchronizer & DRM Fixer • v0.6.0")
         self.subtitle_label.setObjectName("subtitleLabel")
         title_layout.addWidget(title_label)
         title_layout.addWidget(self.subtitle_label)
@@ -316,9 +322,14 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
         self.btn_fix_drm.setObjectName("fixDrmBtn")
         self.btn_fix_drm.clicked.connect(self.trigger_fix_drm)
 
+        self.btn_stop = QtWidgets.QPushButton("Stop Helium Browser")
+        self.btn_stop.setObjectName("stopBrowserBtn")
+        self.btn_stop.clicked.connect(self.trigger_stop_browser)
+
         actions_layout.addWidget(self.btn_sync)
         actions_layout.addWidget(self.btn_restore)
         actions_layout.addWidget(self.btn_fix_drm)
+        actions_layout.addWidget(self.btn_stop)
         status_layout.addWidget(actions_group)
         status_layout.addStretch()
 
@@ -520,7 +531,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             return
 
         # Update Header version
-        app_ver = status_data.get("app_version", "0.5.0")
+        app_ver = status_data.get("app_version", "0.6.0")
         self.subtitle_label.setText(f"Cloud Synchronizer & DRM Fixer • v{app_ver}")
 
         # Update Cards
@@ -555,10 +566,12 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             self.warn_banner.show()
             self.btn_sync.setEnabled(False)
             self.btn_restore.setEnabled(False)
+            self.btn_stop.setEnabled(True)
         else:
             self.warn_banner.hide()
             self.btn_sync.setEnabled(provider != "none")
             self.btn_restore.setEnabled(provider != "none")
+            self.btn_stop.setEnabled(False)
 
     def format_bytes(self, num_bytes):
         if num_bytes == 0:
@@ -685,6 +698,21 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             self.refresh_logs()
         else:
             QtWidgets.QMessageBox.critical(self, "Error", "Failed to apply Widevine DRM fix.")
+
+    def trigger_stop_browser(self):
+        reply = QtWidgets.QMessageBox.question(
+            self, "Stop Helium Browser",
+            "Are you sure you want to force close Helium Browser?\n"
+            "Any unsaved work in your browser will be lost!",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            if api_post("stop-browser"):
+                QtWidgets.QMessageBox.information(self, "Success", "Helium Browser process terminated successfully!")
+                self.refresh_status()
+                self.refresh_logs()
+            else:
+                QtWidgets.QMessageBox.critical(self, "Error", "Failed to terminate Helium Browser process.")
 
 def main():
     if not is_daemon_running():

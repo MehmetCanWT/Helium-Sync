@@ -49,6 +49,7 @@ pub fn create_router() -> Router {
         .route("/api/restore", post(post_restore_handler))
         .route("/api/fix-drm", post(post_fix_drm_handler))
         .route("/api/logs", get(get_logs_handler))
+        .route("/api/stop-browser", post(post_stop_browser_handler))
 }
 
 // GET /api/status
@@ -184,6 +185,13 @@ async fn get_logs_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "logs": get_logs()
     }))
+}
+
+// POST /api/stop-browser
+async fn post_stop_browser_handler() -> impl IntoResponse {
+    add_log("Manual request to stop Helium Browser received.");
+    crate::watcher::stop_helium();
+    StatusCode::OK
 }
 
 
