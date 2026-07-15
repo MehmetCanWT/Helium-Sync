@@ -578,7 +578,7 @@ class HeliumSyncGUI(QtWidgets.QMainWindow):
             return
 
         # Update Header version
-        app_ver = status_data.get("app_version", "0.8.0")
+        app_ver = status_data.get("app_version", "0.9.0")
         self.subtitle_label.setText(f"Cloud Synchronizer & DRM Fixer • v{app_ver}")
 
         # Update Cards
