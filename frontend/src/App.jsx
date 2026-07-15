@@ -31,7 +31,8 @@ function App() {
     browser_running: false,
     drm_status: 'missing', // active, missing, unsupported
     profile_path: '',
-    platform: 'linux'
+    platform: 'linux',
+    app_version: '0.3.0'
   });
 
   const [settings, setSettings] = useState({
@@ -50,6 +51,7 @@ function App() {
   const [showPassword, setShowPassword] = useState(false);
   const [logs, setLogs] = useState([]);
   const [syncing, setSyncing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [fixingDrm, setFixingDrm] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   
@@ -150,6 +152,24 @@ function App() {
     }
   };
 
+  const handleTriggerRestore = async () => {
+    if (restoring) return;
+    if (!confirm("Are you sure you want to download and restore the profile from cloud? This will overwrite your current local browser profile!")) {
+      return;
+    }
+    setRestoring(true);
+    try {
+      const res = await fetch('/api/restore', { method: 'POST' });
+      if (res.ok) {
+        fetchStatus();
+      }
+    } catch (err) {
+      console.error("Failed to trigger restore:", err);
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   const handleFixDrm = async () => {
     if (fixingDrm) return;
     setFixingDrm(true);
@@ -182,7 +202,10 @@ function App() {
         <div className="flex items-center gap-3">
           <img src={logo} alt="Helium Sync Logo" className="h-12 w-12 rounded-xl object-contain shadow-lg shadow-purple-500/10" />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white m-0">Helium Sync</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold tracking-tight text-white m-0">Helium Sync</h1>
+              <span className="bg-neutral-900 text-purple-400 border border-purple-900/30 text-[10px] px-2 py-0.5 rounded font-mono font-bold">v{status.app_version || '0.3.0'}</span>
+            </div>
             <p className="text-xs text-purple-400 font-semibold uppercase tracking-wider">Cloud Synchronizer & DRM Fixer</p>
           </div>
         </div>
@@ -270,7 +293,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="mt-6 flex flex-wrap gap-4">
+                <div className="mt-6 flex flex-wrap gap-4 items-center">
                   <button
                     onClick={handleTriggerSync}
                     disabled={syncing || status.provider === 'none'}
@@ -281,12 +304,32 @@ function App() {
                     }`}
                   >
                     <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-                    {syncing ? 'Synchronizing...' : 'Sync Now'}
+                    {syncing ? 'Syncing...' : 'Sync Now (Push)'}
+                  </button>
+
+                  <button
+                    onClick={handleTriggerRestore}
+                    disabled={restoring || status.provider === 'none'}
+                    className={`px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2 transition-all ${
+                      status.provider === 'none' 
+                        ? 'bg-neutral-900 text-gray-600 cursor-not-allowed border border-neutral-800'
+                        : 'glow-btn-cyan text-white cursor-pointer border border-cyan-500/30 hover:border-cyan-500'
+                    }`}
+                  >
+                    <RefreshCw className={`h-4 w-4 ${restoring ? 'animate-spin' : ''}`} />
+                    {restoring ? 'Restoring...' : 'Restore Now (Pull)'}
                   </button>
                   
                   {status.provider === 'none' && (
                     <p className="text-xs text-amber-400 flex items-center gap-1.5">
                       <Info className="h-4 w-4" /> Please configure a cloud provider in the Settings tab to start synchronization.
+                    </p>
+                  )}
+
+                  {status.browser_running && (
+                    <p className="text-[11px] text-amber-500 font-semibold flex items-center gap-1.5 w-full mt-2 bg-amber-950/20 border border-amber-900/30 p-2.5 rounded-xl">
+                      <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                      Warning: Helium Browser is currently running. Manual sync/restore might fail or cause profile corruption. Please close the browser first!
                     </p>
                   )}
                 </div>

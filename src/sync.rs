@@ -362,7 +362,7 @@ pub async fn pull_webdav(config: &Config) -> Result<Option<Vec<u8>>, String> {
 // Maximum size per Gist file chunk (~900KB base64 = ~675KB raw, well under the 1MB API limit)
 const GIST_CHUNK_SIZE: usize = 900_000;
 
-// GitHub Gist Push (with multi-part chunking for large payloads)
+// GitHub Gist Push (with multi-part chunking and manifest metadata)
 pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(), String> {
     if config.github_token.is_empty() {
         return Err("GitHub Token not configured.".to_string());
@@ -400,8 +400,50 @@ pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(
         }
     }
 
-    // Split b64 content into chunks to stay under Gist per-file size limits
+    // Fetch existing Gist to get the list of current files (so we can delete unused files)
+    let mut old_files = Vec::new();
+    if !config.github_gist_id.is_empty() {
+        let get_url = format!("https://api.github.com/gists/{}", config.github_gist_id);
+        let res = client.get(&get_url)
+            .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+            .bearer_auth(&config.github_token)
+            .send()
+            .await;
+        if let Ok(response) = res {
+            if response.status().is_success() {
+                if let Ok(gist_json) = response.json::<Value>().await {
+                    if let Some(files_map) = gist_json["files"].as_object() {
+                        for filename in files_map.keys() {
+                            if filename.starts_with("helium_sync_") {
+                                old_files.push(filename.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Create the manifest metadata
     let mut files = serde_json::Map::new();
+    let app_version = env!("CARGO_PKG_VERSION");
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let parts_count = if b64_content.len() <= GIST_CHUNK_SIZE { 1 } else { (b64_content.len() + GIST_CHUNK_SIZE - 1) / GIST_CHUNK_SIZE };
+
+    let manifest_content = serde_json::json!({
+        "version": app_version,
+        "timestamp": timestamp,
+        "parts": parts_count,
+        "encrypted": config.encryption_active
+    });
+
+    files.insert(
+        "helium_sync_manifest.json".to_string(),
+        serde_json::json!({ "content": serde_json::to_string_pretty(&manifest_content).unwrap_or_default() }),
+    );
+
+    // Split b64 content into chunks
     if b64_content.len() <= GIST_CHUNK_SIZE {
         files.insert(
             "helium_sync_profile.bin".to_string(),
@@ -413,16 +455,18 @@ pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(
             .chunks(GIST_CHUNK_SIZE)
             .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
             .collect();
-        // Write a manifest so the pull side knows how many parts exist
-        files.insert(
-            "helium_sync_manifest.json".to_string(),
-            serde_json::json!({ "content": serde_json::json!({ "parts": chunks.len() }).to_string() }),
-        );
         for (i, chunk) in chunks.iter().enumerate() {
             files.insert(
                 format!("helium_sync_part_{:04}.bin", i),
                 serde_json::json!({ "content": *chunk }),
             );
+        }
+    }
+
+    // Mark old files that are no longer needed as null so GitHub deletes them
+    for old_file in old_files {
+        if !files.contains_key(&old_file) {
+            files.insert(old_file, serde_json::Value::Null);
         }
     }
 
@@ -479,7 +523,7 @@ pub async fn push_github_gist(config: &mut Config, file_data: &[u8]) -> Result<(
     Ok(())
 }
 
-// GitHub Gist Pull (supports multi-part chunked payloads)
+// GitHub Gist Pull (supports multi-part chunked payloads and manifest verification)
 pub async fn pull_github_gist(config: &mut Config) -> Result<Option<Vec<u8>>, String> {
     if config.github_token.is_empty() {
         return Err("GitHub Token not configured.".to_string());
@@ -542,31 +586,47 @@ pub async fn pull_github_gist(config: &mut Config) -> Result<Option<Vec<u8>>, St
     let gist_json: Value = res.json().await.map_err(|e| format!("Failed to parse Gist JSON: {}", e))?;
     let files = &gist_json["files"];
 
-    // Check if this is a single-file or multi-part backup
-    if let Some(single_content) = files["helium_sync_profile.bin"]["content"].as_str() {
-        // Single-file backup (small profile)
-        let decoded = BASE64_STANDARD.decode(single_content)
-            .map_err(|e| format!("Base64 decoding error: {}", e))?;
-        return Ok(Some(decoded));
+    // Check if manifest exists
+    if let Some(manifest_file) = files["helium_sync_manifest.json"].as_object() {
+        if let Some(manifest_str) = manifest_file["content"].as_str() {
+            if let Ok(manifest) = serde_json::from_str::<Value>(manifest_str) {
+                let backup_version = manifest["version"].as_str().unwrap_or("0.1.0");
+                let timestamp = manifest["timestamp"].as_str().unwrap_or("Unknown");
+                crate::watcher::add_log(&format!("Found cloud backup (Version: {}, Created: {})", backup_version, timestamp));
+                
+                let current_version = env!("CARGO_PKG_VERSION");
+                if backup_version != current_version {
+                    crate::watcher::add_log(&format!("[WARN] Cloud backup version ({}) differs from local daemon version ({})", backup_version, current_version));
+                }
+
+                let parts = manifest["parts"].as_u64().unwrap_or(1) as usize;
+                if parts == 1 {
+                    if let Some(single_content) = files["helium_sync_profile.bin"]["content"].as_str() {
+                        let decoded = BASE64_STANDARD.decode(single_content)
+                            .map_err(|e| format!("Base64 decoding error: {}", e))?;
+                        return Ok(Some(decoded));
+                    }
+                } else {
+                    let mut combined_b64 = String::new();
+                    for i in 0..parts {
+                        let part_name = format!("helium_sync_part_{:04}.bin", i);
+                        let part_content = files[&part_name]["content"].as_str()
+                            .ok_or_else(|| format!("Missing chunk file: {}", part_name))?;
+                        combined_b64.push_str(part_content);
+                    }
+                    let decoded = BASE64_STANDARD.decode(&combined_b64)
+                        .map_err(|e| format!("Base64 decoding error (multi-part): {}", e))?;
+                    return Ok(Some(decoded));
+                }
+            }
+        }
     }
 
-    // Multi-part backup: read manifest and reassemble chunks
-    if let Some(manifest_str) = files["helium_sync_manifest.json"]["content"].as_str() {
-        let manifest: Value = serde_json::from_str(manifest_str)
-            .map_err(|e| format!("Failed to parse manifest: {}", e))?;
-        let parts = manifest["parts"].as_u64()
-            .ok_or_else(|| "Invalid manifest: missing parts count.".to_string())? as usize;
-
-        let mut combined_b64 = String::new();
-        for i in 0..parts {
-            let part_name = format!("helium_sync_part_{:04}.bin", i);
-            let part_content = files[&part_name]["content"].as_str()
-                .ok_or_else(|| format!("Missing chunk file: {}", part_name))?;
-            combined_b64.push_str(part_content);
-        }
-
-        let decoded = BASE64_STANDARD.decode(&combined_b64)
-            .map_err(|e| format!("Base64 decoding error (multi-part): {}", e))?;
+    // Backward compatibility fallback: if manifest doesn't exist, check for single profile bin
+    if let Some(single_content) = files["helium_sync_profile.bin"]["content"].as_str() {
+        crate::watcher::add_log("Found legacy cloud backup (No manifest, assuming v0.1.0/v0.2.0)");
+        let decoded = BASE64_STANDARD.decode(single_content)
+            .map_err(|e| format!("Base64 decoding error: {}", e))?;
         return Ok(Some(decoded));
     }
 
