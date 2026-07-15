@@ -512,6 +512,42 @@ pub async fn push_github_releases(config: &mut Config, file_data: &[u8]) -> Resu
         return Err(format!("Failed to check repository (Status {}): {}", repo_status, text));
     }
 
+    // 2.5 Ensure repository has at least one branch/commit before creating a release (Fixes GitHub API 422 error on empty repos)
+    let branches_url = format!("https://api.github.com/repos/{}/{}/branches", owner, repo);
+    let branches_res = client.get(&branches_url)
+        .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+        .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+        .bearer_auth(&config.github_token)
+        .send()
+        .await;
+    if let Ok(b_res) = branches_res {
+        if let Ok(branches_json) = b_res.json::<Vec<Value>>().await {
+            if branches_json.is_empty() {
+                crate::watcher::add_log("Repository is currently empty. Creating initial README.md commit...");
+                let readme_url = format!("https://api.github.com/repos/{}/{}/contents/README.md", owner, repo);
+                let readme_body = serde_json::json!({
+                    "message": "Initialize Helium Sync backup repository",
+                    "content": "IyBIZWxpdW0gU3luYyBCYWNrdXBzCgpUaGlzIHJlcG9zaXRvcnkgc3RvcmVzIHlvdXIgSGVsaXVtIHByb2ZpbGUgc3luYyBkYXRhLgo="
+                });
+                let put_res = client.put(&readme_url)
+                    .header(reqwest::header::USER_AGENT, "helium-sync-daemon")
+                    .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+                    .bearer_auth(&config.github_token)
+                    .json(&readme_body)
+                    .send()
+                    .await;
+                if let Ok(r) = put_res {
+                    if !r.status().is_success() {
+                        crate::watcher::add_log(&format!("[WARN] Initial commit status: {}", r.status()));
+                    } else {
+                        crate::watcher::add_log("Initial README.md commit created.");
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+        }
+    }
+
     // 3. Get or create release tagged "latest"
     crate::watcher::add_log("Fetching 'latest' release metadata...");
     let release_url = format!("https://api.github.com/repos/{}/{}/releases/tags/latest", owner, repo);

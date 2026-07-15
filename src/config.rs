@@ -69,8 +69,11 @@ pub fn load_config() -> Config {
             if let Ok(mut file) = File::open(&path) {
                 let mut contents = String::new();
                 if file.read_to_string(&mut contents).is_ok() {
-                    if let Ok(config) = serde_json::from_str::<Config>(&contents) {
-                        return config;
+                    match serde_json::from_str::<Config>(&contents) {
+                        Ok(config) => return config,
+                        Err(e) => {
+                            crate::watcher::add_log(&format!("[WARN] Failed to parse config.json: {}. Using default settings.", e));
+                        }
                     }
                 }
             }
